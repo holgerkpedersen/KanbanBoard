@@ -1,0 +1,9 @@
+# Runtime board data (persisted frames/cards)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/

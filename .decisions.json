@@ -1,0 +1,41 @@
+[
+  {
+    "id": "001",
+    "date": "2026-08-28T20:23:21+00:00",
+    "title": "Disable Flask debug mode in production",
+    "context": "Refinement notes classic Flask pitfall: app.run(debug=True) in app.py (UNVERIFIED) allows RCE via Werkzeug debugger if exception triggered by malformed request.",
+    "decision": "Must ensure debug=False in production config (or env-gated), avoiding debug=True.",
+    "rationale": "Prevents remote code execution vulnerability.",
+    "affected_files": ["src/agent1/app.py"],
+    "tags": ["security", "flask", "rce", "configuration"],
+    "contradictions": [],
+    "resolved_by": "src/agent1/app.py sets app.config['DEBUG']=False and runs with debug=False.",
+    "meta_warnings": []
+  },
+  {
+    "id": "002",
+    "date": "2026-08-28T20:23:22+00:00",
+    "title": "Pin Flask dependency version",
+    "context": "Dependencies: Flask Python package must be pip-installed; no version pin specified in spec. app.py referenced per spec unverified.",
+    "decision": "Pin Flask==3.1.3 (matches installed runtime) and Werkzeug==3.1.3 in requirements.txt.",
+    "rationale": "Ensures reproducible builds and avoids unexpected breaking changes.",
+    "affected_files": ["requirements.txt", "src/agent1/app.py"],
+    "tags": ["dependency", "architecture"],
+    "contradictions": [],
+    "resolved_by": "Added requirements.txt pinning Flask==3.1.3 and Werkzeug==3.1.3.",
+    "meta_warnings": []
+  },
+  {
+    "id": "003",
+    "date": "2026-08-28T20:23:22+00:00",
+    "title": "Adhere to prohibition of external libraries",
+    "context": "Dependencies: Browser-native HTML5 DnD API; prohibition on external JS/CSS libraries per spec. static/main.js, static/style.css mentioned unverified.",
+    "decision": "Use only vanilla JS and native APIs, no CDNs/frameworks.",
+    "rationale": "Meets spec constraint and reduces supply-chain risk.",
+    "affected_files": ["src/agent1/static/main.js", "src/agent1/static/style.css"],
+    "tags": ["architecture", "frontend", "dependencies"],
+    "contradictions": [],
+    "resolved_by": "static/main.js and static/style.css are hand-written vanilla JS/CSS using native DnD API; no external libraries.",
+    "meta_warnings": []
+  }
+]

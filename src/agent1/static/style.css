@@ -1,0 +1,225 @@
+:root {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --surface-2: #21262f;
+  --border: #2b313b;
+  --text: #e6e9ef;
+  --muted: #9aa4b2;
+  --accent: #5b8cff;
+  --accent-2: #3a6bff;
+  --danger: #ff5b6e;
+  --radius: 10px;
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  font-size: 20px;
+  margin: 0;
+  letter-spacing: 0.5px;
+  background: linear-gradient(90deg, var(--accent), #a98bff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.search {
+  flex: 1;
+  max-width: 520px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.search:focus { border-color: var(--accent); }
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 9px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn:hover { background: #2a313c; }
+.btn-primary {
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.08); }
+
+.board {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 20px;
+  overflow-x: auto;
+  min-height: calc(100vh - 64px);
+}
+
+.frame {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 300px;
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow);
+}
+
+.frame.dragging-frame { opacity: 0.5; }
+.frame.drop-target { outline: 2px dashed var(--accent); outline-offset: 2px; }
+
+.frame-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.frame-title {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 6px;
+  outline: none;
+}
+.frame-title:focus { border-color: var(--accent); background: var(--surface-2); }
+
+.frame-tools { display: flex; gap: 4px; flex-shrink: 0; }
+.icon-btn {
+  width: 28px; height: 28px;
+  border: none; border-radius: 6px;
+  background: transparent; color: var(--muted);
+  cursor: pointer; font-size: 16px; line-height: 1;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.frame-del:hover { color: var(--danger); }
+
+/* Drag-sound mute toggle (sits in the topbar, matches .icon-btn) */
+.sfx-toggle {
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* One-time first-run prompt to opt into drag sounds */
+.sfx-prompt {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 20;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.sfx-prompt[hidden] { display: none; }
+
+.cards {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 40px;
+  flex: 1;
+}
+.cards.drop-active { background: rgba(91, 140, 255, 0.08); }
+
+.card {
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: grab;
+  transition: transform 0.08s ease, box-shadow 0.15s ease;
+}
+.card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+.card.dragging { opacity: 0.4; }
+.card-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.card-text { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-wrap; }
+.card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+  background: rgba(91, 140, 255, 0.15);
+  color: #b9ccff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.card-tools { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
+.card:hover .card-tools { display: flex; }
+
+.placeholder {
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  height: 44px;
+  background: rgba(91, 140, 255, 0.06);
+}
+
+.modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+}
+.modal.hidden { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); }
+.modal-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  width: min(440px, 92vw);
+  display: flex; flex-direction: column; gap: 12px;
+  box-shadow: var(--shadow);
+}
+.modal-card h2 { margin: 0; font-size: 18px; }
+.modal-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.modal-card input, .modal-card textarea {
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 14px; outline: none;
+}
+.modal-card input:focus, .modal-card textarea:focus { border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+.empty-hint { color: var(--muted); font-size: 12px; padding: 6px; text-align: center; }
