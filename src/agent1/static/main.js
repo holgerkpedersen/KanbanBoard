@@ -154,6 +154,26 @@ function matchesQuery(card) {
 function render() {
   board.replaceChildren();
   state.frames.forEach((frame) => board.appendChild(renderFrame(frame)));
+  refreshSystemList();
+}
+
+// Keep the System <datalist> in sync with the systems used on the board so
+// users get autocomplete suggestions for existing systems.
+function refreshSystemList() {
+  const list = $("#system-list");
+  if (!list) return;
+  const systems = new Set();
+  state.frames.forEach((f) =>
+    f.cards.forEach((c) => {
+      if (c.system) systems.add(c.system);
+    })
+  );
+  list.replaceChildren();
+  systems.forEach((s) => {
+    const opt = document.createElement("option");
+    opt.value = s;
+    list.appendChild(opt);
+  });
 }
 
 function renderFrame(frame) {
@@ -206,6 +226,14 @@ function renderCard(card) {
   if (card.text) text.textContent = card.text;
   else text.remove();
 
+  const systemBox = $(".card-system", node);
+  if (card.system) {
+    systemBox.textContent = card.system;
+    systemBox.hidden = false;
+  } else {
+    systemBox.remove();
+  }
+
   const tagsBox = $(".card-tags", node);
   (card.tags || []).forEach((t) => tagsBox.appendChild(el("span", "tag", t)));
 
@@ -241,6 +269,7 @@ function openCardModal(frameId, card) {
   $("#card-title").value = card ? card.title : "";
   $("#card-text").value = card ? card.text || "" : "";
   $("#card-tags").value = card ? (card.tags || []).join(", ") : "";
+  $("#card-system").value = card ? card.system || "" : "";
   $("#card-modal-title").textContent = card ? "Edit card" : "New card";
   cardModal.classList.remove("hidden");
   $("#card-title").focus();
@@ -263,14 +292,25 @@ cardForm.addEventListener("submit", async (e) => {
     .value.split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+  const system = $("#card-system").value.trim();
   if (!title) return;
 
   try {
     if (editing.card) {
-      const updated = await Api.updateCard(editing.card.id, { title, text, tags });
+      const updated = await Api.updateCard(editing.card.id, {
+        title,
+        text,
+        tags,
+        system,
+      });
       Object.assign(editing.card, updated);
     } else {
-      const created = await Api.createCard(editing.frameId, { title, text, tags });
+      const created = await Api.createCard(editing.frameId, {
+        title,
+        text,
+        tags,
+        system,
+      });
       const frame = state.frames.find((f) => f.id === editing.frameId);
       frame.cards.push(created);
     }
@@ -439,5 +479,25 @@ if (sfxPrompt && !localStorage.getItem("kanban.sfx.prompted")) {
     renderSfxToggle();
     localStorage.setItem("kanban.sfx.prompted", "1");
     sfxPrompt.hidden = true;
+  });
+}
+
+// ---- Theme: dark / light / contrast selector ------------------------------
+// The saved theme is applied before first paint by an inline nonce'd script
+// in index.html (anti-flash). Here we keep the <select> in sync and persist
+// the user's choice, mirroring the sfx preference flow.
+const THEMES = ["dark", "light", "contrast", "contrast-dark"];
+const themeSelect = $("#theme-select");
+function applyTheme(theme) {
+  if (!THEMES.includes(theme)) theme = "dark";
+  document.documentElement.setAttribute("data-theme", theme);
+  if (themeSelect) themeSelect.value = theme;
+}
+applyTheme(localStorage.getItem("kanban.theme") || "dark");
+if (themeSelect) {
+  themeSelect.addEventListener("change", () => {
+    const theme = themeSelect.value;
+    localStorage.setItem("kanban.theme", theme);
+    applyTheme(theme);
   });
 }

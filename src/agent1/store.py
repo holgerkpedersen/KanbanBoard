@@ -77,6 +77,7 @@ class BoardStore:
                 text=c.get("text", ""),
                 frame_id=c["frame_id"],
                 tags=list(c.get("tags", [])),
+                system=c.get("system", ""),
             )
             self._cards[card.id] = card
 

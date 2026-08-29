@@ -1,6 +1,7 @@
 import os
+import secrets
 
-from flask import Flask, Response, request, render_template
+from flask import Flask, Response, request, render_template, make_response
 
 from .store import BoardStore
 from .routes_frames import create_frame_blueprint
@@ -25,11 +26,18 @@ def create_app(data_path: str | None = None) -> Flask:
 
     @app.get("/")
     def index() -> Response:
-        return render_template("index.html")
+        # Per-request nonce so the inline anti-flash theme script is allowed
+        # by the strict CSP (script-src 'self' 'nonce-...').
+        nonce = secrets.token_hex(16)
+        resp = make_response(render_template("index.html", theme_nonce=nonce))
+        return apply_security_headers(resp, nonce)
 
     @app.after_request
     def _secure(response: Response) -> Response:
-        return apply_security_headers(response)
+        # Static assets (JS/CSS) carry no inline script, so they need no nonce.
+        if "Content-Security-Policy" not in response.headers:
+            return apply_security_headers(response)
+        return response
 
     return app
 

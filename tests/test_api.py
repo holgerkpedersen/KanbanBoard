@@ -186,3 +186,54 @@ def test_input_validation_rejects_overlong_title():
     long_title = "x" * 1000
     r = c.post("/api/frames", json={"title": long_title}, headers=CSRF)
     assert r.status_code == 400
+
+
+def test_card_system_property_round_trips():
+    c = _client()
+    f = c.post("/api/frames", json={"title": "To Do"}, headers=CSRF).get_json()
+
+    # Create a card with a system assignment.
+    r = c.post(
+        "/api/cards",
+        json={"title": "Fix login", "system": "Auth", "frame_id": f["id"]},
+        headers=CSRF,
+    )
+    assert r.status_code == 201
+    card = r.get_json()
+    cid = card["id"]
+    assert card["system"] == "Auth"
+
+    # Cards without a system default to an empty string.
+    r = c.post(
+        "/api/cards",
+        json={"title": "Tidy docs", "frame_id": f["id"]},
+        headers=CSRF,
+    )
+    assert r.status_code == 201
+    assert r.get_json()["system"] == ""
+
+    # Update the system on an existing card.
+    r = c.put(
+        f"/api/cards/{cid}",
+        json={"system": "Billing"},
+        headers=CSRF,
+    )
+    assert r.status_code == 200
+    assert r.get_json()["system"] == "Billing"
+
+    # The system is exposed via the board endpoint too.
+    board = c.get("/api/frames/board").get_json()
+    by_id = {cd["id"]: cd for fr in board for cd in fr["cards"]}
+    assert by_id[cid]["system"] == "Billing"
+
+
+def test_card_system_rejects_overlong_value():
+    c = _client()
+    f = c.post("/api/frames", json={"title": "To Do"}, headers=CSRF).get_json()
+    r = c.post(
+        "/api/cards",
+        json={"title": "X", "system": "s" * 1000, "frame_id": f["id"]},
+        headers=CSRF,
+    )
+    assert r.status_code == 400
+

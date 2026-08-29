@@ -7,6 +7,14 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+  <script nonce="{{ theme_nonce }}">
+    // Apply the saved theme before first paint to avoid a flash of the
+    // default theme. Allowed by the strict CSP via the per-request nonce.
+    (function () {
+      var t = localStorage.getItem("kanban.theme") || "dark";
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
   <header class="topbar">
     <h1 class="brand">Kanban</h1>
     <input
@@ -18,6 +26,15 @@
       aria-label="Search cards"
     />
     <button id="add-frame" class="btn btn-primary" type="button">+ Add Frame</button>
+    <label class="theme-picker">
+      <span class="visually-hidden">Theme</span>
+      <select id="theme-select" aria-label="Theme">
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="contrast">Contrast</option>
+        <option value="contrast-dark">Contrast Dark</option>
+      </select>
+    </label>
     <button class="icon-btn sfx-toggle" type="button" aria-label="Mute drag sounds">🔇</button>
   </header>
 
@@ -44,6 +61,11 @@
         Tags (comma separated)
         <input id="card-tags" name="tags" type="text" />
       </label>
+      <label>
+        System
+        <input id="card-system" name="system" type="text" maxlength="60" list="system-list" placeholder="e.g. Billing, Auth, API" />
+        <datalist id="system-list"></datalist>
+      </label>
       <div class="modal-actions">
         <button type="button" class="btn" data-close>Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
@@ -68,6 +90,7 @@
     <article class="card" draggable="true" role="listitem">
       <div class="card-title"></div>
       <p class="card-text"></p>
+      <div class="card-system" hidden></div>
       <div class="card-tags"></div>
       <div class="card-tools">
         <button class="icon-btn card-edit" title="Edit" type="button">✎</button>

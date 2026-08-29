@@ -7,6 +7,7 @@ from .models import Card
 from .security import (
     validate_card_title,
     validate_card_text,
+    validate_card_system,
     has_csrf_header,
     apply_security_headers,
 )
@@ -28,6 +29,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
         try:
             title = validate_card_title(str(data.get("title", "")))
             text = validate_card_text(str(data.get("text", "")))
+            system = validate_card_system(str(data.get("system", "")))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         raw_tags = data.get("tags", [])
@@ -38,6 +40,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             text=text,
             frame_id=frame_id,
             tags=tags,
+            system=system,
         )
         store.add_card(card, frame_id)
         resp = jsonify(card.to_dict())
@@ -72,6 +75,11 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
         if "text" in data:
             try:
                 card.text = validate_card_text(str(data["text"]))
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+        if "system" in data:
+            try:
+                card.system = validate_card_system(str(data["system"]))
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
         if "tags" in data:

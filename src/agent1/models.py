@@ -9,6 +9,7 @@ class Card:
     text: str
     frame_id: str
     tags: List[str] = field(default_factory=list)
+    system: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -17,6 +18,7 @@ class Card:
             "text": self.text,
             "frame_id": self.frame_id,
             "tags": self.tags,
+            "system": self.system,
         }
 
 
