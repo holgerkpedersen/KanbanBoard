@@ -58,6 +58,10 @@ All mutating requests require the header `X-Requested-With: XMLHttpRequest`.
 | PUT    | `/api/cards/<id>`     | Update card `{title,text,tags,...}`  |
 | DELETE | `/api/cards/<id>`     | Delete a card                        |
 | POST   | `/api/cards/<id>/move`| Move card `{frame_id,index?}`        |
+| GET    | `/api/boards`         | List catalog boards + active pointer |
+| POST   | `/api/boards/select`  | Open a catalog board `{catalog_id}`  |
+| POST   | `/api/boards/reset`   | Re-seed working copy from catalog    |
+| POST   | `/api/boards/upload`  | Ingest a board (JSON body or `.json` multipart file) into the catalog; `?activate=1` also selects it |
 
 ## Tests
 

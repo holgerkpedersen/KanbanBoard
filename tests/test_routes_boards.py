@@ -1,11 +1,14 @@
 """Tests for the /api/boards blueprint.
 
-These exercise the HTTP layer, including CSRF enforcement, the
-path-validation rules, the live-store swap, and the per-board isolation
-of mutations.
+The board manager is catalog-based: Agent1 seeds
+``<working_dir>/boards/<id>.json``; the app copies the seed to
+``<working_dir>/board-<id>.json`` on first pick, re-uses the working
+copy on subsequent picks (so progress is preserved), and can be reset
+back to the seed.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,19 +22,25 @@ from src.agent1.store import BoardStore
 CSRF = {"X-Requested-With": "XMLHttpRequest"}
 
 
-def _client(tmp_path, data_path=None):
+def _client(tmp_path, *, working_dir=None, catalog_dir=None):
+    """Build a test client backed by on-disk catalog + working folders."""
+    wd = working_dir or str(tmp_path / "data")
+    cd = catalog_dir or str(tmp_path / "data" / "boards")
+    os.makedirs(wd, exist_ok=True)
+    os.makedirs(cd, exist_ok=True)
     app = create_app(
-        data_path=str(data_path) if data_path else None,
-        registry_path=str(tmp_path / "boards.json"),
+        working_dir=wd,
+        catalog_dir=cd,
+        registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
-    app.config["UPLOADS_DIR"] = str(tmp_path / "uploads")
-    return app.test_client(), app
+    return app.test_client(), app, wd, cd
 
 
-def _write_board(tmp_path, name="board.json", *, frames=2, cards=1):
-    p = tmp_path / name
-    data = {
+def _write_seed(catalog_dir, catalog_id, *, frames=2, cards=1, name=None):
+    p = Path(catalog_dir) / f"{catalog_id}.json"
+    payload = {
+        "name": name or catalog_id,
         "frames": [
             {"id": f"f{i}", "title": f"Frame {i}", "card_ids": [f"c{i}"]}
             for i in range(frames)
@@ -48,371 +57,329 @@ def _write_board(tmp_path, name="board.json", *, frames=2, cards=1):
             for i in range(cards)
         ],
     }
-    p.write_text(json.dumps(data), encoding="utf-8")
+    p.write_text(json.dumps(payload), encoding="utf-8")
     return str(p)
 
 
 # ---- list / active --------------------------------------------------------
 
 
-def test_list_boards_initially_empty(tmp_path):
-    c, _ = _client(tmp_path)
+def test_list_returns_empty_catalog(tmp_path):
+    c, _, _, _ = _client(tmp_path)
     r = c.get("/api/boards")
     assert r.status_code == 200
     body = r.get_json()
-    assert body["boards"] == []
+    assert body["catalog"] == []
     assert body["active"] is None
+    assert body["current_path"] is None
 
 
-def test_active_endpoint_empty_when_no_board(tmp_path):
-    c, _ = _client(tmp_path)
+def test_list_returns_catalog_with_display_names(tmp_path):
+    c, _, _, cd = _client(tmp_path)
+    _write_seed(cd, "alpha", name="Plan Alpha")
+    _write_seed(cd, "beta", name="Plan Beta")
+    r = c.get("/api/boards")
+    body = r.get_json()
+    catalog = {e["id"]: e for e in body["catalog"]}
+    assert set(catalog) == {"alpha", "beta"}
+    assert catalog["alpha"]["name"] == "Plan Alpha"
+    assert catalog["alpha"]["source_path"].endswith("alpha.json")
+
+
+def test_list_returns_fallback_name_when_seed_has_none(tmp_path):
+    c, _, _, cd = _client(tmp_path)
+    _write_seed(cd, "no-name-board", name=None)
+    # Overwrite with no "name" key.
+    p = Path(cd) / "no-name-board.json"
+    p.write_text(json.dumps({"frames": [], "cards": []}), encoding="utf-8")
+    r = c.get("/api/boards")
+    catalog = r.get_json()["catalog"]
+    assert catalog[0]["id"] == "no-name-board"
+    assert catalog[0]["name"] == "no-name-board"  # fallback to id
+
+
+def test_list_skips_non_json_and_invalid_ids(tmp_path):
+    c, _, _, cd = _client(tmp_path)
+    _write_seed(cd, "good")
+    (Path(cd) / "README.md").write_text("hello", encoding="utf-8")
+    (Path(cd) / "with space.json").write_text("{}", encoding="utf-8")
+    r = c.get("/api/boards")
+    ids = [e["id"] for e in r.get_json()["catalog"]]
+    assert ids == ["good"]
+
+
+def test_list_includes_security_headers(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    r = c.get("/api/boards")
+    assert "Content-Security-Policy" in r.headers
+
+
+def test_active_empty_when_nothing_selected(tmp_path):
+    c, _, _, _ = _client(tmp_path)
     r = c.get("/api/boards/active")
     assert r.status_code == 200
     assert r.get_json() == {}
 
 
-# ---- create ---------------------------------------------------------------
+def test_active_empty_when_selected_id_no_longer_in_catalog(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    # Pre-seed a stale active pointer.
+    app = c.application
+    app.config["BOARD_REGISTRY"].set_active("deleted")
+    r = c.get("/api/boards/active")
+    assert r.get_json() == {}
 
 
-def test_create_board_writes_file_and_registers(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post(
-        "/api/boards/create",
-        json={
-            "name": "My Plan",
-            "folder": str(tmp_path),
-            "filename": "plan.json",
-        },
-        headers=CSRF,
-    )
-    assert r.status_code == 201, r.data
-    entry = r.get_json()
-    assert entry["name"] == "My Plan"
-    target = Path(entry["path"])
-    assert target.exists()
-    payload = json.loads(target.read_text(encoding="utf-8"))
-    assert payload == {"frames": [], "cards": []}
-    # The new board is now active.
-    active = c.get("/api/boards/active").get_json()
-    assert active["id"] == entry["id"]
+# ---- select ---------------------------------------------------------------
 
 
-def test_create_board_rejects_existing_file(tmp_path):
-    c, _ = _client(tmp_path)
-    target = tmp_path / "exists.json"
-    target.write_text("{}", encoding="utf-8")
-    r = c.post(
-        "/api/boards/create",
-        json={"name": "X", "folder": str(tmp_path), "filename": "exists.json"},
-        headers=CSRF,
-    )
-    assert r.status_code == 409
+def test_select_copies_seed_and_activates(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
+    _write_seed(cd, "alpha", frames=3, cards=2)
+    r = c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["id"] == "alpha"
+    assert body["current_path"].endswith("board-alpha.json")
+    # Working copy exists with the same content.
+    working = Path(body["current_path"])
+    assert working.exists()
+    payload = json.loads(working.read_text(encoding="utf-8"))
+    assert len(payload["frames"]) == 3
+    # Frames endpoint serves the new working copy.
+    board = c.get("/api/frames/board").get_json()
+    assert len(board) == 3
+    # List now shows the active id.
+    listed = c.get("/api/boards").get_json()
+    assert listed["active"] == "alpha"
+    assert listed["current_path"] == str(working)
 
 
-def test_create_board_validates_name_and_filename(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post(
-        "/api/boards/create",
-        json={"name": "", "folder": str(tmp_path), "filename": "ok.json"},
-        headers=CSRF,
-    )
+def test_select_preserves_local_edits_on_repick(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
+    _write_seed(cd, "alpha", frames=2)
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
+    # User edits: add a frame via the API.
+    c.post("/api/frames", json={"title": "Local"}, headers=CSRF)
+    # User picks the same board again.
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
+    board = c.get("/api/frames/board").get_json()
+    titles = sorted(f["title"] for f in board)
+    assert "Local" in titles
+    # The seed file in the catalog is unchanged.
+    seed = json.loads((Path(cd) / "alpha.json").read_text(encoding="utf-8"))
+    assert "Local" not in {f["title"] for f in seed["frames"]}
+
+
+def test_select_unknown_catalog_id_returns_404(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    r = c.post("/api/boards/select", json={"catalog_id": "ghost"}, headers=CSRF)
+    assert r.status_code == 404
+
+
+def test_select_requires_catalog_id(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    r = c.post("/api/boards/select", json={}, headers=CSRF)
     assert r.status_code == 400
-    r = c.post(
-        "/api/boards/create",
-        json={"name": "OK", "folder": str(tmp_path), "filename": "no-extension"},
-        headers=CSRF,
-    )
+    r = c.post("/api/boards/select", json={"catalog_id": ""}, headers=CSRF)
     assert r.status_code == 400
 
 
-def test_create_board_requires_csrf(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post(
-        "/api/boards/create",
-        json={"name": "X", "folder": str(tmp_path), "filename": "x.json"},
-    )
+def test_select_requires_csrf(tmp_path):
+    c, _, _, cd = _client(tmp_path)
+    _write_seed(cd, "alpha")
+    r = c.post("/api/boards/select", json={"catalog_id": "alpha"})
     assert r.status_code == 403
 
 
-# ---- open-file (path) ----------------------------------------------------
+def test_select_410_when_seed_missing(tmp_path):
+    """Race: the catalog listed a board but the seed file was removed
+    between list and select. Should be a 410, not a 500."""
+    c, app, _, cd = _client(tmp_path)
+    # Register the id without writing the seed.
+    (Path(cd) / "ghost.json").write_text("{}", encoding="utf-8")
+    os.remove(Path(cd) / "ghost.json")
+    # Force a catalog cache miss so the entry isn't reported.
+    r = c.post("/api/boards/select", json={"catalog_id": "ghost"}, headers=CSRF)
+    # The catalog won't even know about "ghost" since the file is gone.
+    assert r.status_code == 404
 
 
-def test_open_file_by_path_registers_existing_board(tmp_path):
-    c, _ = _client(tmp_path)
-    src = _write_board(tmp_path, "src.json")
-    r = c.post("/api/boards/open-file", json={"path": src}, headers=CSRF)
-    assert r.status_code == 201, r.data
-    entry = r.get_json()
-    assert entry["path"] == src
-    # Active now reflects the new file.
-    active = c.get("/api/boards/active").get_json()
-    assert active["id"] == entry["id"]
-    # /api/frames/board now returns the new file's frames.
+# ---- reset ----------------------------------------------------------------
+
+
+def test_reset_re_copies_seed_and_discards_edits(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
+    _write_seed(cd, "alpha", frames=2)
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
+    # User adds a frame.
+    c.post("/api/frames", json={"title": "Local"}, headers=CSRF)
+    # Update the seed so reset is observable.
+    _write_seed(cd, "alpha", frames=4, name="Alpha Updated")
+    r = c.post("/api/boards/reset", json={"catalog_id": "alpha"}, headers=CSRF)
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["reset"] is True
+    board = c.get("/api/frames/board").get_json()
+    assert len(board) == 4
+    titles = {f["title"] for f in board}
+    assert "Local" not in titles
+    working = json.loads(Path(body["current_path"]).read_text(encoding="utf-8"))
+    assert working["name"] == "Alpha Updated"
+
+
+def test_reset_unknown_catalog_id_returns_404(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    r = c.post("/api/boards/reset", json={"catalog_id": "ghost"}, headers=CSRF)
+    assert r.status_code == 404
+
+
+def test_reset_requires_csrf(tmp_path):
+    c, _, _, cd = _client(tmp_path)
+    _write_seed(cd, "alpha")
+    r = c.post("/api/boards/reset", json={"catalog_id": "alpha"})
+    assert r.status_code == 403
+
+
+# ---- cross-board isolation -----------------------------------------------
+
+
+def test_selecting_different_boards_swaps_live_data(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
+    _write_seed(cd, "alpha", frames=2, name="Alpha")
+    _write_seed(cd, "beta", frames=3, name="Beta")
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
+    board = c.get("/api/frames/board").get_json()
+    assert len(board) == 2
+    c.post("/api/boards/select", json={"catalog_id": "beta"}, headers=CSRF)
+    board = c.get("/api/frames/board").get_json()
+    assert len(board) == 3
+    # Switching back reuses alpha's existing working copy (still 2 frames).
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     board = c.get("/api/frames/board").get_json()
     assert len(board) == 2
 
 
-def test_open_file_rejects_relative_path(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post(
-        "/api/boards/open-file", json={"path": "relative.json"}, headers=CSRF
+def test_working_files_never_land_in_catalog(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
+    _write_seed(cd, "alpha", frames=1)
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
+    c.post("/api/frames", json={"title": "Local"}, headers=CSRF)
+    catalog_files = sorted(os.listdir(cd))
+    assert catalog_files == ["alpha.json"]
+    working_files = sorted(
+        f for f in os.listdir(wd) if f.startswith("board-")
     )
-    assert r.status_code == 400
+    assert working_files == ["board-alpha.json"]
 
 
-def test_open_file_rejects_non_json_extension(tmp_path):
-    c, _ = _client(tmp_path)
-    target = tmp_path / "notjson.txt"
-    target.write_text("{}", encoding="utf-8")
+# ---- upload ---------------------------------------------------------------
+
+
+def _board_payload(name="Uploaded Plan", frames=2, cards=1):
+    return {
+        "name": name,
+        "frames": [
+            {"id": f"f{i}", "title": f"Frame {i}", "card_ids": [f"c{i}"]}
+            for i in range(frames)
+        ],
+        "cards": [
+            {
+                "id": f"c{i}",
+                "title": f"Card {i}",
+                "text": "",
+                "frame_id": f"f{i}",
+                "tags": [],
+                "system": "",
+            }
+            for i in range(cards)
+        ],
+    }
+
+
+def test_upload_json_creates_catalog_entry(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
     r = c.post(
-        "/api/boards/open-file", json={"path": str(target)}, headers=CSRF
+        "/api/boards/upload", json=_board_payload(name="Plan X"), headers=CSRF
     )
-    assert r.status_code == 400
+    assert r.status_code == 201, r.data
+    body = r.get_json()
+    assert body["name"] == "Plan X"
+    assert body["active"] is False
+    # The catalog now contains exactly one board with that id.
+    listed = c.get("/api/boards").get_json()
+    ids = [e["id"] for e in listed["catalog"]]
+    assert body["id"] in ids
+    # The seed file exists in the catalog folder.
+    seed = Path(cd) / f"{body['id']}.json"
+    assert seed.exists()
+    payload = json.loads(seed.read_text(encoding="utf-8"))
+    assert payload["name"] == "Plan X"
 
 
-def test_open_file_rejects_illegal_characters(tmp_path):
-    c, _ = _client(tmp_path)
+def test_upload_multipart_file(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
+    import io
+
+    data = _board_payload(name="Multipart Plan")
     r = c.post(
-        "/api/boards/open-file",
-        json={"path": str(tmp_path) + "\\ba|d.json"},
-        headers=CSRF,
-    )
-    assert r.status_code == 400
-
-
-def test_open_file_rejects_invalid_board_json(tmp_path):
-    c, _ = _client(tmp_path)
-    target = tmp_path / "wrong.json"
-    target.write_text("{}", encoding="utf-8")
-    r = c.post(
-        "/api/boards/open-file", json={"path": str(target)}, headers=CSRF
-    )
-    assert r.status_code == 400
-
-
-def test_open_file_rejects_missing_file(tmp_path):
-    c, _ = _client(tmp_path)
-    target = tmp_path / "ghost.json"
-    r = c.post(
-        "/api/boards/open-file", json={"path": str(target)}, headers=CSRF
-    )
-    assert r.status_code == 400
-
-
-# ---- open-file (content upload, the browser FS-Access-API branch) --------
-
-
-def test_open_file_with_inline_content_saves_managed_copy(tmp_path):
-    c, app = _client(tmp_path)
-    content = json.dumps({"frames": [], "cards": []})
-    r = c.post(
-        "/api/boards/open-file",
-        json={"name": "Imported", "content": content},
+        "/api/boards/upload",
+        data={"file": (io.BytesIO(json.dumps(data).encode()), "board.json")},
         headers=CSRF,
     )
     assert r.status_code == 201, r.data
-    entry = r.get_json()
-    target = Path(entry["path"])
-    assert target.exists()
-    assert target.parent == Path(app.config["UPLOADS_DIR"])
+    body = r.get_json()
+    assert body["name"] == "Multipart Plan"
+    listed = c.get("/api/boards").get_json()
+    assert body["id"] in {e["id"] for e in listed["catalog"]}
 
 
-def test_open_file_with_invalid_content_returns_400(tmp_path):
-    c, _ = _client(tmp_path)
+def test_upload_invalid_shape_rejected(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    # Missing both frames and cards.
+    r = c.post("/api/boards/upload", json={"name": "bad"}, headers=CSRF)
+    assert r.status_code == 400
+    # Non-object card.
     r = c.post(
-        "/api/boards/open-file",
-        json={"name": "Bad", "content": "{ not json"},
+        "/api/boards/upload",
+        json={"frames": [{"id": "f1"}], "cards": [{"title": "no id"}]},
         headers=CSRF,
     )
     assert r.status_code == 400
 
 
-def test_open_file_with_non_board_content_returns_400(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post(
-        "/api/boards/open-file",
-        json={"name": "X", "content": json.dumps({"foo": 1})},
-        headers=CSRF,
-    )
-    assert r.status_code == 400
-
-
-# ---- select --------------------------------------------------------------
-
-
-def test_select_swaps_live_store(tmp_path):
-    c, _ = _client(tmp_path)
-    # Set up two distinct boards.
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "A", "folder": str(tmp_path), "filename": "a.json"},
-        headers=CSRF,
-    ).get_json()
-    # Add a frame to A.
-    c.post("/api/frames", json={"title": "A-frame"}, headers=CSRF)
-    # Create B (now active, so /api/frames sees an empty board).
-    b = c.post(
-        "/api/boards/create",
-        json={"name": "B", "folder": str(tmp_path), "filename": "b.json"},
-        headers=CSRF,
-    ).get_json()
-    # B is active -> no frames.
-    assert c.get("/api/frames").get_json() == []
-    # Switch back to A.
-    r = c.post("/api/boards/select", json={"id": a["id"]}, headers=CSRF)
-    assert r.status_code == 200
-    # A's frame is visible again.
-    frames = c.get("/api/frames").get_json()
-    assert len(frames) == 1
-    assert frames[0]["title"] == "A-frame"
-
-
-def test_select_unknown_id_returns_404(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post("/api/boards/select", json={"id": "nope"}, headers=CSRF)
-    assert r.status_code == 404
-
-
-def test_select_requires_csrf(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.post("/api/boards/select", json={"id": "x"})
+def test_upload_requires_csrf(tmp_path):
+    c, _, _, _ = _client(tmp_path)
+    r = c.post("/api/boards/upload", json=_board_payload())
     assert r.status_code == 403
 
 
-# ---- rename --------------------------------------------------------------
-
-
-def test_rename_board(tmp_path):
-    c, _ = _client(tmp_path)
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "Old", "folder": str(tmp_path), "filename": "x.json"},
-        headers=CSRF,
-    ).get_json()
-    r = c.put(f"/api/boards/{a['id']}", json={"name": "New"}, headers=CSRF)
-    assert r.status_code == 200
-    assert r.get_json()["name"] == "New"
-    # Visible in the listing.
-    listed = c.get("/api/boards").get_json()["boards"]
-    assert listed[0]["name"] == "New"
-
-
-# ---- duplicate -----------------------------------------------------------
-
-
-def test_duplicate_copies_file_and_registers(tmp_path):
-    c, _ = _client(tmp_path)
-    src = _write_board(tmp_path, "src.json", frames=1, cards=1)
-    a = c.post(
-        "/api/boards/open-file", json={"path": src}, headers=CSRF
-    ).get_json()
+def test_upload_activate_selects_board(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
     r = c.post(
-        f"/api/boards/{a['id']}/duplicate",
-        json={"new_name": "Copy", "dest_path": str(tmp_path / "copy.json")},
+        "/api/boards/upload?activate=1",
+        json=_board_payload(name="Auto Plan", frames=3),
         headers=CSRF,
     )
     assert r.status_code == 201, r.data
-    new = r.get_json()
-    assert Path(new["path"]).exists()
-    assert json.loads(Path(new["path"]).read_text(encoding="utf-8")) == json.loads(
-        Path(src).read_text(encoding="utf-8")
-    )
-    assert new["name"] == "Copy"
+    body = r.get_json()
+    assert body["active"] is True
+    assert body["current_path"].endswith(f"board-{body['id']}.json")
+    # The frames endpoint now serves the uploaded board.
+    board = c.get("/api/frames/board").get_json()
+    assert len(board) == 3
+    listed = c.get("/api/boards").get_json()
+    assert listed["active"] == body["id"]
 
 
-def test_duplicate_rejects_existing_destination(tmp_path):
-    c, _ = _client(tmp_path)
-    src = _write_board(tmp_path, "src.json")
-    a = c.post(
-        "/api/boards/open-file", json={"path": src}, headers=CSRF
-    ).get_json()
-    target = tmp_path / "exists.json"
-    target.write_text("{}", encoding="utf-8")
+def test_uploaded_board_appears_in_picker_and_opens(tmp_path):
+    c, _, wd, cd = _client(tmp_path)
     r = c.post(
-        f"/api/boards/{a['id']}/duplicate",
-        json={"new_name": "X", "dest_path": str(target)},
-        headers=CSRF,
+        "/api/boards/upload", json=_board_payload(name="Picker Plan"), headers=CSRF
     )
-    assert r.status_code == 409
-
-
-# ---- delete --------------------------------------------------------------
-
-
-def test_delete_unregisters_keeps_file_by_default(tmp_path):
-    c, _ = _client(tmp_path)
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "X", "folder": str(tmp_path), "filename": "x.json"},
-        headers=CSRF,
-    ).get_json()
-    target = Path(a["path"])
-    assert target.exists()
-    r = c.delete(f"/api/boards/{a['id']}", headers=CSRF)
-    assert r.status_code == 204
-    assert target.exists()  # file not deleted
-    assert c.get("/api/boards").get_json()["boards"] == []
-
-
-def test_delete_with_delete_file_true_removes_file(tmp_path):
-    c, _ = _client(tmp_path)
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "X", "folder": str(tmp_path), "filename": "x.json"},
-        headers=CSRF,
-    ).get_json()
-    target = Path(a["path"])
-    assert target.exists()
-    r = c.delete(
-        f"/api/boards/{a['id']}?delete_file=true", headers=CSRF
-    )
-    assert r.status_code == 204
-    assert not target.exists()
-
-
-def test_delete_active_board_falls_back_to_next_or_empty(tmp_path):
-    c, _ = _client(tmp_path)
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "A", "folder": str(tmp_path), "filename": "a.json"},
-        headers=CSRF,
-    ).get_json()
-    b = c.post(
-        "/api/boards/create",
-        json={"name": "B", "folder": str(tmp_path), "filename": "b.json"},
-        headers=CSRF,
-    ).get_json()
-    # B is the current active.
-    r = c.delete(f"/api/boards/{b['id']}", headers=CSRF)
-    assert r.status_code == 204
-    # A becomes active.
-    active = c.get("/api/boards/active").get_json()
-    assert active["id"] == a["id"]
-
-
-# ---- CSRF parity for all write endpoints --------------------------------
-
-
-@pytest.mark.parametrize(
-    "method,path",
-    [
-        ("POST", "/api/boards/create"),
-        ("POST", "/api/boards/open-file"),
-        ("POST", "/api/boards/select"),
-    ],
-)
-def test_writes_require_csrf_header(tmp_path, method, path):
-    c, _ = _client(tmp_path)
-    r = c.open(path, method=method, json={})
-    assert r.status_code == 403
-
-
-# ---- security headers parity ---------------------------------------------
-
-
-def test_boards_endpoints_carry_security_headers(tmp_path):
-    c, _ = _client(tmp_path)
-    r = c.get("/api/boards")
-    assert r.headers.get("X-Content-Type-Options") == "nosniff"
-    assert r.headers.get("X-Frame-Options") == "DENY"
-    assert "default-src 'self'" in r.headers.get("Content-Security-Policy", "")
+    bid = r.get_json()["id"]
+    # Open it like a user would.
+    r = c.post("/api/boards/select", json={"catalog_id": bid}, headers=CSRF)
+    assert r.status_code == 200
+    board = c.get("/api/frames/board").get_json()
+    assert len(board) == 2

@@ -1,11 +1,16 @@
 """Application factory for the Kanban board service.
 
-The app is single-process and single-user; "multi-board" means we can
-hold any number of board files on disk and switch which one is loaded
-into memory at a time. The board-management endpoints live in
-``routes_boards.py``; this module wires them up to a
-:class:`BoardRegistry` and a per-app "live store" holder so that the
-existing frame/card blueprints keep working unchanged.
+The app is single-process and single-user. The set of available boards
+is determined by the contents of a catalog folder (default
+``data/boards/``) that Agent1 maintains. When the user picks a board,
+the server copies the seed to a working copy in the working folder
+(default ``data/``) and loads that into memory.
+
+The board-management endpoints live in ``routes_boards.py``; this
+module wires them up to a :class:`BoardRegistry` (active-id pointer), a
+:class:`BoardCatalog` (read-only view of the seed folder), and a
+per-app "live store" holder so the existing frame/card blueprints keep
+working unchanged.
 """
 
 from __future__ import annotations
@@ -19,19 +24,25 @@ from flask import Flask, Response, request, render_template, make_response, g
 
 from .store import BoardStore
 from .board_registry import BoardRegistry
+from .board_catalog import BoardCatalog
 from .routes_frames import create_frame_blueprint
 from .routes_cards import create_card_blueprint
 from .routes_boards import create_boards_blueprint
 from .security import apply_security_headers
 
-# Default on-disk location for the running app. Tests call create_app()
-# with no path, so they stay purely in-memory and deterministic.
-DEFAULT_DATA_PATH = os.environ.get("KANBAN_DATA_PATH", "data/board.json")
-DEFAULT_REGISTRY_PATH = os.environ.get(
-    "KANBAN_REGISTRY_PATH",
-    os.path.join(os.path.dirname(DEFAULT_DATA_PATH) or "data", "boards.json"),
+# Default on-disk locations. Tests call create_app() with no path, so
+# they stay purely in-memory and deterministic.
+DEFAULT_WORKING_DIR = os.environ.get("KANBAN_WORKING_DIR", "data")
+DEFAULT_CATALOG_DIR = os.environ.get(
+    "KANBAN_CATALOG_DIR", os.path.join(DEFAULT_WORKING_DIR, "boards")
 )
-MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # cap for the open-file upload path
+DEFAULT_REGISTRY_PATH = os.environ.get(
+    "KANBAN_REGISTRY_PATH", os.path.join(DEFAULT_WORKING_DIR, "active.json")
+)
+DEFAULT_UPLOADS_DIR = os.environ.get(
+    "KANBAN_UPLOADS_DIR", os.path.join(DEFAULT_WORKING_DIR, "uploads")
+)
+MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # cap for any future upload path
 
 
 def _make_live_holder() -> dict:
@@ -39,64 +50,76 @@ def _make_live_holder() -> dict:
 
 
 def create_app(
-    data_path: str | None = None,
+    working_dir: str | None = None,
+    catalog_dir: str | None = None,
     registry_path: str | None = None,
+    uploads_dir: str | None = None,
 ) -> Flask:
     """Build a Flask app.
 
     Parameters
     ----------
-    data_path:
-        On-disk path of the initial board file. If the registry is empty
-        (e.g. first run), this file is registered and marked active.
+    working_dir:
+        Folder where the per-board working copies live
+        (e.g. ``data/board-<id>.json``). The current board is here.
         ``None`` (the test-suite default) keeps the app in-memory.
+    catalog_dir:
+        Folder of seed ``.json`` files Agent1 maintains
+        (e.g. ``data/boards/``). Read-only from the app's perspective.
     registry_path:
-        On-disk path of the board registry. Defaults to
-        ``<dir of data_path>/boards.json`` when ``data_path`` is set,
-        else ``data/boards.json``.
+        On-disk path of the active-id pointer file.
+    uploads_dir:
+        Folder where uploaded board JSON is staged before being promoted
+        into the catalog (``data/boards/``). The upload endpoint writes the
+        canonical catalog copy directly, so this is mainly a documented
+        landing area; it defaults to ``<working_dir>/uploads``.
     """
     app = Flask(__name__)
     app.config["DEBUG"] = False
     app.config["TESTING"] = False
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
+    if working_dir is None:
+        working_dir = DEFAULT_WORKING_DIR
+    if catalog_dir is None:
+        catalog_dir = DEFAULT_CATALOG_DIR
     if registry_path is None:
-        if data_path:
-            registry_path = os.path.join(
-                os.path.dirname(data_path) or "data", "boards.json"
-            )
-        else:
-            registry_path = DEFAULT_REGISTRY_PATH
+        registry_path = DEFAULT_REGISTRY_PATH
+    if uploads_dir is None:
+        uploads_dir = DEFAULT_UPLOADS_DIR
 
+    os.makedirs(working_dir, exist_ok=True)
+    os.makedirs(catalog_dir, exist_ok=True)
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    catalog = BoardCatalog(folder=catalog_dir)
     registry = BoardRegistry(path=registry_path)
+    app.config["BOARD_CATALOG"] = catalog
     app.config["BOARD_REGISTRY"] = registry
-    app.config["LIVE_STORE_HOLDER"] = _make_live_holder()
+    app.config["WORKING_DIR"] = working_dir
+    app.config["UPLOADS_DIR"] = uploads_dir
+    holder = _make_live_holder()
 
-    # On startup, if a default data_path was provided, ensure the
-    # registry has it (first-run convenience). In tests, data_path is
-    # None so the registry stays empty and the live store is None until
-    # the first /api/boards call wires it up.
-    bootstrap_store: Optional[BoardStore] = None
-    if data_path:
-        entry = registry.ensure_default(
-            name=os.path.splitext(os.path.basename(data_path))[0] or "Board",
-            path=data_path,
-        )
-        bootstrap_store = BoardStore(path=entry["path"])
-        holder = app.config["LIVE_STORE_HOLDER"]
-        with holder["lock"]:
-            holder["store"] = bootstrap_store
-            holder["path"] = entry["path"]
+    # On boot, if the active-id pointer is set and the matching working
+    # copy exists, hydrate the in-memory store from disk so a restart
+    # preserves the user's progress. If there's no active id yet, leave
+    # the holder empty; the per-request hook will allocate a single
+    # shared in-memory store (which keeps the test suite happy).
+    active_id = registry.get_active()
+    if active_id:
+        working_path = os.path.join(working_dir, f"board-{active_id}.json")
+        if os.path.isfile(working_path):
+            holder["store"] = BoardStore(path=working_path)
+            holder["path"] = working_path
 
-    app.config["BOOTSTRAP_STORE"] = bootstrap_store
+    app.config["LIVE_STORE_HOLDER"] = holder
 
     # Per-request hook: bind the currently-active store onto g so the
     # frames/cards blueprints pick it up via their current_store() helper.
-    # If neither the live store nor a bootstrap store is configured (e.g.
-    # the test suite, or a request arriving before the user picks a
-    # board), allocate a single persistent in-memory store on the holder
-    # and reuse it across requests. That preserves the previous test
-    # behavior where the app is a single shared in-memory board.
+    # If no board is active yet (no /api/boards/select call this run),
+    # allocate a single persistent in-memory store on the holder and
+    # reuse it across requests. That keeps the test suite, which never
+    # selects a board, working with a single in-memory board.
     @app.before_request
     def _bind_active_store() -> None:
         holder = app.config["LIVE_STORE_HOLDER"]
@@ -111,6 +134,7 @@ def create_app(
     # Register blueprints. The frames/cards blueprints accept a
     # "bootstrap" store arg for legacy/test usage; the per-request
     # g-bound store takes precedence when present.
+    bootstrap_store: Optional[BoardStore] = None
     frames_bp = create_frame_blueprint(bootstrap_store or BoardStore(path=None))
     cards_bp = create_card_blueprint(bootstrap_store or BoardStore(path=None))
     boards_bp = create_boards_blueprint()
@@ -136,7 +160,8 @@ def create_app(
     return app
 
 
-app: Flask = create_app(DEFAULT_DATA_PATH)
+app: Flask = create_app()
+
 
 if __name__ == "__main__":
     app.run(debug=False, host="127.0.0.1", port=5000)

@@ -15,13 +15,33 @@ def _client():
 
 
 def _client_with_boards(tmp_path):
+    wd = tmp_path / "data"
+    cd = wd / "boards"
+    wd.mkdir(parents=True, exist_ok=True)
+    cd.mkdir(parents=True, exist_ok=True)
     app = create_app(
-        data_path=None,
-        registry_path=str(tmp_path / "boards.json"),
+        working_dir=str(wd),
+        catalog_dir=str(cd),
+        registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
     app.config["UPLOADS_DIR"] = str(tmp_path / "uploads")
     return app.test_client()
+
+
+def _seed(catalog_dir, catalog_id, *, name=None, frames=0):
+    import json
+    p = Path(catalog_dir) / f"{catalog_id}.json"
+    p.write_text(
+        json.dumps(
+            {
+                "name": name or catalog_id,
+                "frames": [{"id": f"f{i}", "title": f"F{i}", "card_ids": []} for i in range(frames)],
+                "cards": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_app_boots_and_lists_routes():
@@ -253,75 +273,69 @@ def test_card_system_rejects_overlong_value():
 
 def test_select_switches_visible_board_data(tmp_path):
     c = _client_with_boards(tmp_path)
-    # Board A: one frame.
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "A", "folder": str(tmp_path), "filename": "a.json"},
-        headers=CSRF,
-    ).get_json()
+    catalog = c.application.config["BOARD_CATALOG"].folder
+    _seed(catalog, "alpha", name="Alpha")
+    _seed(catalog, "beta", name="Beta")
+
+    # Pick alpha, add a frame.
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     c.post("/api/frames", json={"title": "A-Only"}, headers=CSRF)
-    # Board B (now active, so /api/frames sees B's data, which is empty).
-    b = c.post(
-        "/api/boards/create",
-        json={"name": "B", "folder": str(tmp_path), "filename": "b.json"},
-        headers=CSRF,
-    ).get_json()
+
+    # Switch to beta and add a frame there.
+    c.post("/api/boards/select", json={"catalog_id": "beta"}, headers=CSRF)
     c.post("/api/frames", json={"title": "B-Only"}, headers=CSRF)
-    # Currently active: B.
-    assert any(
-        fr["title"] == "B-Only"
-        for fr in c.get("/api/frames").get_json()
-    )
-    # Switch to A.
-    c.post("/api/boards/select", json={"id": a["id"]}, headers=CSRF)
+
+    # Switch back to alpha: only A-Only is visible.
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     titles = [fr["title"] for fr in c.get("/api/frames").get_json()]
-    assert "A-Only" in titles
-    assert "B-Only" not in titles
-    # /api/boards/active reflects the swap.
+    assert titles == ["A-Only"]
     active = c.get("/api/boards/active").get_json()
-    assert active["id"] == a["id"]
+    assert active["id"] == "alpha"
 
 
 def test_mutations_on_one_board_do_not_leak_to_another(tmp_path):
     c = _client_with_boards(tmp_path)
-    a = c.post(
-        "/api/boards/create",
-        json={"name": "A", "folder": str(tmp_path), "filename": "a.json"},
-        headers=CSRF,
-    ).get_json()
+    catalog = c.application.config["BOARD_CATALOG"].folder
+    _seed(catalog, "alpha")
+    _seed(catalog, "beta")
+
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     c.post("/api/frames", json={"title": "Stay-on-A"}, headers=CSRF)
-    c.post(
-        "/api/boards/create",
-        json={"name": "B", "folder": str(tmp_path), "filename": "b.json"},
-        headers=CSRF,
-    ).get_json()
+    c.post("/api/boards/select", json={"catalog_id": "beta"}, headers=CSRF)
     c.post("/api/frames", json={"title": "B-frame"}, headers=CSRF)
-    # Switch to A; B's frame must not be visible.
-    c.post("/api/boards/select", json={"id": a["id"]}, headers=CSRF)
+
+    # Switch to A: B's frame must not be visible.
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     titles = [fr["title"] for fr in c.get("/api/frames").get_json()]
     assert titles == ["Stay-on-A"]
 
 
-def test_create_app_registers_default_data_path(tmp_path):
-    data_file = tmp_path / "board.json"
+def test_create_app_persists_active_id_across_restart(tmp_path):
+    wd = tmp_path / "data"
+    cd = wd / "boards"
+    cd.mkdir(parents=True, exist_ok=True)
+    _seed(cd, "alpha", name="Alpha")
     app = create_app(
-        data_path=str(data_file),
-        registry_path=str(tmp_path / "boards.json"),
+        working_dir=str(wd),
+        catalog_dir=str(cd),
+        registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
     c = app.test_client()
-    # The default board is registered and active on first boot.
-    active = c.get("/api/boards/active").get_json()
-    assert active["path"] == str(data_file)
-    # And mutations to it are persisted.
+    c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     c.post("/api/frames", json={"title": "Default"}, headers=CSRF)
-    # Restart the app and confirm the file is loaded.
+
+    # Restart the app; the active id survives and the working file
+    # still has the user's frame.
     app2 = create_app(
-        data_path=str(data_file),
-        registry_path=str(tmp_path / "boards.json"),
+        working_dir=str(wd),
+        catalog_dir=str(cd),
+        registry_path=str(tmp_path / "active.json"),
     )
     app2.config["TESTING"] = True
     c2 = app2.test_client()
     titles = [fr["title"] for fr in c2.get("/api/frames").get_json()]
     assert titles == ["Default"]
+    active = c2.get("/api/boards/active").get_json()
+    assert active["id"] == "alpha"
 

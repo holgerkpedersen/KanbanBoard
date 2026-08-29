@@ -109,63 +109,34 @@
     <div class="modal-card board-modal-card">
       <h2 id="board-modal-title">Boards</h2>
 
-      <ul id="board-list" class="board-picker-list" aria-label="Saved boards"></ul>
+      <p class="board-picker-help">
+        Boards are produced by Agent1 in
+        <code id="board-catalog-dir">data/boards</code>. Pick one to open
+        it; your edits are saved to
+        <code id="board-working-dir">data</code> so the catalog stays
+        pristine.
+      </p>
 
-      <details class="board-picker-section">
-        <summary>+ New board</summary>
-        <form id="board-create-form" class="board-picker-form">
-          <label>
-            Name
-            <input id="board-create-name" type="text" maxlength="100" required />
-          </label>
-          <label>
-            Folder (absolute path)
-            <input id="board-create-folder" type="text" placeholder="C:\Users\you\Documents\Kanban" required />
-          </label>
-          <label>
-            Filename
-            <input id="board-create-filename" type="text" value="board.json" required />
-          </label>
-          <div class="modal-actions">
-            <button type="submit" class="btn btn-primary">Create</button>
-          </div>
-        </form>
-      </details>
+      <div class="board-picker-row">
+        <label for="board-select" class="board-picker-label">Board</label>
+        <select id="board-select" class="board-picker-select" size="6"></select>
+      </div>
 
-      <details class="board-picker-section">
-        <summary>Open file from disk…</summary>
-        <p class="board-picker-help">
-          Pick an existing <code>.json</code> file from anywhere on your
-          computer, or paste its absolute path below. Browsers don't share the
-          real filesystem path for security, so a picked file is uploaded to
-          the app's managed <code>uploads/</code> folder and registered from
-          there. To keep the file in its current location, paste its absolute
-          path instead.
-        </p>
-        <div class="board-picker-row">
-          <button id="board-pick-file" type="button" class="btn">Pick file…</button>
-          <span id="board-pick-filename" class="board-picker-filename"></span>
-        </div>
-        <form id="board-open-path-form" class="board-picker-form">
-          <label>
-            Absolute path
-            <input id="board-open-path" type="text" placeholder="C:\Users\you\Documents\my-board.json" />
-          </label>
-          <label>
-            Display name (optional)
-            <input id="board-open-name" type="text" maxlength="100" />
-          </label>
-          <div class="modal-actions">
-            <button id="board-open-submit" type="submit" class="btn">Open</button>
-          </div>
-        </form>
-      </details>
-
-      <div id="board-modal-error" class="board-picker-error" hidden></div>
+      <div class="board-upload-row">
+        <label for="board-upload-file" class="board-picker-label">Upload board</label>
+        <input id="board-upload-file" class="board-upload-input" type="file"
+               accept="application/json,.json" />
+        <button id="board-upload-submit" type="button" class="btn">Upload</button>
+      </div>
 
       <div class="modal-actions">
+        <button id="board-open-submit" type="button" class="btn btn-primary">Open</button>
+        <button id="board-reset-submit" type="button" class="btn">Reset</button>
         <button type="button" class="btn" data-close>Close</button>
       </div>
+
+      <p id="board-modal-info" class="board-picker-info" hidden></p>
+      <div id="board-modal-error" class="board-picker-error" hidden></div>
     </div>
   </div>
 

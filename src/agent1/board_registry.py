@@ -1,24 +1,26 @@
-"""Persistent registry of board files + which one is currently active.
+"""Active-board pointer for the Kanban app.
 
-The registry is itself a small JSON file (default ``data/boards.json``)
-that tracks a list of known board files (by absolute path) and an
-``active`` id pointing at the one currently loaded in memory. It is the
-single source of truth for "which board is open" and survives process
-restarts.
+The Kanban app is single-user. The "catalog" of available boards lives
+in a folder Agent1 maintains (default ``data/boards/``). The user picks
+one catalog board, the app copies the seed to a per-board working file
+(default ``data/board-<catalog_id>.json``) and loads that into memory.
 
-Atomic-write semantics: same as :class:`BoardStore` — write to a ``.tmp``
-file, then ``os.replace`` into place, so a crash mid-write cannot leave a
-half-written registry on disk.
+What this module persists is just **which catalog id is currently
+active** so the app can re-open the right working copy after a
+restart. There is no user-managed list of boards anymore — the
+catalog is the single source of truth and Agent1 owns it.
+
+Atomic-write semantics: write to a ``.tmp`` file, then ``os.replace``
+into place, so a crash mid-write cannot leave a half-written pointer
+on disk.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import secrets
 import threading
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Optional
 
 
 def _atomic_write_json(path: str, data: object) -> None:
@@ -31,19 +33,12 @@ def _atomic_write_json(path: str, data: object) -> None:
     os.replace(tmp, path)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _new_id() -> str:
-    return secrets.token_hex(4)  # 8 hex chars
-
-
 class BoardRegistry:
+    """Trivial active-id pointer (atomic-write JSON)."""
+
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = threading.RLock()
-        self._boards: Dict[str, Dict[str, str]] = {}
         self._active: Optional[str] = None
         self._load()
 
@@ -55,109 +50,32 @@ class BoardRegistry:
             with open(self._path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except (OSError, json.JSONDecodeError):
-            # Corrupt registry: start clean rather than crash the app.
+            # Corrupt pointer: start with no active board rather than
+            # crash the app.
             return
         if not isinstance(data, dict):
             return
-        for entry in data.get("boards", []) or []:
-            if not isinstance(entry, dict):
-                continue
-            bid = entry.get("id")
-            path = entry.get("path")
-            name = entry.get("name") or ""
-            last_opened = entry.get("last_opened") or ""
-            if not isinstance(bid, str) or not isinstance(path, str):
-                continue
-            self._boards[bid] = {
-                "id": bid,
-                "name": name,
-                "path": path,
-                "last_opened": last_opened,
-            }
         active = data.get("active")
-        if isinstance(active, str) and active in self._boards:
+        if isinstance(active, str) and active:
             self._active = active
 
     def _save(self) -> None:
-        _atomic_write_json(
-            self._path,
-            {
-                "boards": list(self._boards.values()),
-                "active": self._active,
-            },
-        )
+        _atomic_write_json(self._path, {"active": self._active})
 
     # ---- public API --------------------------------------------------------
-    def list(self) -> List[Dict[str, str]]:
+    def get_active(self) -> Optional[str]:
+        """Return the active catalog id, or ``None``."""
         with self._lock:
-            return list(self._boards.values())
+            return self._active
 
-    def get(self, board_id: str) -> Optional[Dict[str, str]]:
+    def set_active(self, catalog_id: str) -> None:
         with self._lock:
-            entry = self._boards.get(board_id)
-            return dict(entry) if entry is not None else None
-
-    def get_active(self) -> Optional[Dict[str, str]]:
-        with self._lock:
-            if self._active is None:
-                return None
-            entry = self._boards.get(self._active)
-            return dict(entry) if entry is not None else None
-
-    def add(self, name: str, path: str) -> Dict[str, str]:
-        with self._lock:
-            bid = _new_id()
-            while bid in self._boards:
-                bid = _new_id()
-            entry = {
-                "id": bid,
-                "name": name,
-                "path": path,
-                "last_opened": _now_iso(),
-            }
-            self._boards[bid] = entry
-            self._save()
-            return dict(entry)
-
-    def remove(self, board_id: str) -> None:
-        with self._lock:
-            self._boards.pop(board_id, None)
-            if self._active == board_id:
-                self._active = None
+            if not isinstance(catalog_id, str) or not catalog_id:
+                raise ValueError("catalog_id must be a non-empty string")
+            self._active = catalog_id
             self._save()
 
-    def rename(self, board_id: str, name: str) -> Dict[str, str]:
+    def clear(self) -> None:
         with self._lock:
-            entry = self._boards[board_id]
-            entry["name"] = name
+            self._active = None
             self._save()
-            return dict(entry)
-
-    def set_active(self, board_id: str) -> Dict[str, str]:
-        with self._lock:
-            if board_id not in self._boards:
-                raise KeyError(board_id)
-            self._active = board_id
-            self._boards[board_id]["last_opened"] = _now_iso()
-            self._save()
-            return dict(self._boards[board_id])
-
-    def ensure_default(self, name: str, path: str) -> Dict[str, str]:
-        """First-run helper: if the registry is empty, register ``path``
-        and mark it active. Returns the active entry."""
-        with self._lock:
-            if self._active is not None and self._active in self._boards:
-                return dict(self._boards[self._active])
-            # Also dedupe by path: if a board with this path already
-            # exists (e.g. the user re-pointed the same data file), reuse
-            # it instead of creating a duplicate.
-            for existing in self._boards.values():
-                if existing["path"] == path:
-                    self._active = existing["id"]
-                    existing["last_opened"] = _now_iso()
-                    self._save()
-                    return dict(existing)
-            entry = self.add(name, path)
-            self._active = entry["id"]
-            self._save()
-            return dict(entry)
