@@ -1,4 +1,12 @@
-from flask import Blueprint, request, jsonify, make_response, Response
+from flask import (
+    Blueprint,
+    current_app,
+    g,
+    request,
+    jsonify,
+    make_response,
+    Response,
+)
 from typing import Any, Dict
 import uuid
 
@@ -9,6 +17,22 @@ from .security import (
     has_csrf_header,
     apply_security_headers,
 )
+
+
+def current_store() -> BoardStore:
+    """Return the BoardStore for this request.
+
+    Prefers the per-request store bound on ``g`` by the app's
+    ``before_request`` hook (which is what the multi-board switcher
+    updates). Falls back to the bootstrap store passed in at blueprint
+    construction time, so single-board tests keep working.
+    """
+    store = g.get("board_store")
+    if store is not None:
+        return store
+    fallback = current_app.config.get("BOOTSTRAP_STORE")
+    assert fallback is not None, "No BoardStore configured for this request"
+    return fallback
 
 
 def create_frame_blueprint(store: BoardStore) -> Blueprint:
@@ -24,20 +48,21 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         frame = Frame(id=uuid.uuid4().hex, title=title, card_ids=[])
-        store.add_frame(frame)
+        current_store().add_frame(frame)
         resp = jsonify(frame.to_dict())
         resp.status_code = 201
         return apply_security_headers(resp)
 
     @bp.route("", methods=["GET"])
     def list_frames() -> Response:
-        frames = store.get_all_frames()
+        frames = current_store().get_all_frames()
         return apply_security_headers(
             jsonify([f.to_dict() for f in frames])
         )
 
     @bp.route("/board", methods=["GET"])
     def get_board() -> Response:
+        store = current_store()
         frames = store.get_all_frames()
         board = []
         for f in frames:
@@ -52,7 +77,7 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/<frame_id>", methods=["GET"])
     def read_frame(frame_id: str) -> Response:
-        frame = store.get_frame(frame_id)
+        frame = current_store().get_frame(frame_id)
         if frame is None:
             return jsonify({"error": "not found"}), 404
         return apply_security_headers(jsonify(frame.to_dict()))
@@ -61,6 +86,7 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
     def update_frame(frame_id: str) -> Response:
         if not has_csrf_header(request):
             return jsonify({"error": "csrf"}), 403
+        store = current_store()
         frame = store.get_frame(frame_id)
         if frame is None:
             return jsonify({"error": "not found"}), 404
@@ -77,9 +103,9 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
     def delete_frame(frame_id: str) -> Response:
         if not has_csrf_header(request):
             return jsonify({"error": "csrf"}), 403
-        if store.get_frame(frame_id) is None:
+        if current_store().get_frame(frame_id) is None:
             return jsonify({"error": "not found"}), 404
-        store.delete_frame(frame_id)
+        current_store().delete_frame(frame_id)
         resp = make_response("", 204)
         return apply_security_headers(resp)
 
@@ -93,7 +119,7 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
             isinstance(fid, str) for fid in order
         ):
             return jsonify({"error": "order required"}), 400
-        store.reorder_frames(order)
+        current_store().reorder_frames(order)
         return apply_security_headers(jsonify({"ok": True}))
 
     return bp

@@ -1,4 +1,12 @@
-from flask import Blueprint, request, jsonify, make_response, Response
+from flask import (
+    Blueprint,
+    current_app,
+    g,
+    request,
+    jsonify,
+    make_response,
+    Response,
+)
 from typing import Any, Dict
 import uuid
 
@@ -13,6 +21,17 @@ from .security import (
 )
 
 
+def current_store() -> BoardStore:
+    """Return the BoardStore for this request (per-request g-bound, with
+    bootstrap fallback). See ``routes_frames.current_store``."""
+    store = g.get("board_store")
+    if store is not None:
+        return store
+    fallback = current_app.config.get("BOOTSTRAP_STORE")
+    assert fallback is not None, "No BoardStore configured for this request"
+    return fallback
+
+
 def create_card_blueprint(store: BoardStore) -> Blueprint:
     bp = Blueprint("cards", __name__)
 
@@ -24,6 +43,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
         frame_id = data.get("frame_id")
         if not isinstance(frame_id, str):
             return jsonify({"error": "frame_id required"}), 400
+        store = current_store()
         if store.get_frame(frame_id) is None:
             return jsonify({"error": "frame not found"}), 404
         try:
@@ -49,12 +69,12 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("", methods=["GET"])
     def list_cards() -> Response:
-        cards = store.get_all_cards()
+        cards = current_store().get_all_cards()
         return apply_security_headers(jsonify([c.to_dict() for c in cards]))
 
     @bp.route("/<card_id>", methods=["GET"])
     def read_card(card_id: str) -> Response:
-        card = store.get_card(card_id)
+        card = current_store().get_card(card_id)
         if card is None:
             return jsonify({"error": "not found"}), 404
         return apply_security_headers(jsonify(card.to_dict()))
@@ -63,6 +83,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
     def update_card_endpoint(card_id: str) -> Response:
         if not has_csrf_header(request):
             return jsonify({"error": "csrf"}), 403
+        store = current_store()
         card = store.get_card(card_id)
         if card is None:
             return jsonify({"error": "not found"}), 404
@@ -99,9 +120,9 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
     def delete_card_endpoint(card_id: str) -> Response:
         if not has_csrf_header(request):
             return jsonify({"error": "csrf"}), 403
-        if store.get_card(card_id) is None:
+        if current_store().get_card(card_id) is None:
             return jsonify({"error": "not found"}), 404
-        store.delete_card(card_id)
+        current_store().delete_card(card_id)
         resp = make_response("", 204)
         return apply_security_headers(resp)
 
@@ -109,6 +130,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
     def move_card(card_id: str) -> Response:
         if not has_csrf_header(request):
             return jsonify({"error": "csrf"}), 403
+        store = current_store()
         card = store.get_card(card_id)
         if card is None:
             return jsonify({"error": "not found"}), 404

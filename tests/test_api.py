@@ -14,6 +14,16 @@ def _client():
     return app.test_client()
 
 
+def _client_with_boards(tmp_path):
+    app = create_app(
+        data_path=None,
+        registry_path=str(tmp_path / "boards.json"),
+    )
+    app.config["TESTING"] = True
+    app.config["UPLOADS_DIR"] = str(tmp_path / "uploads")
+    return app.test_client()
+
+
 def test_app_boots_and_lists_routes():
     app = create_app()
     rules = {str(r) for r in app.url_map.iter_rules()}
@@ -236,4 +246,82 @@ def test_card_system_rejects_overlong_value():
         headers=CSRF,
     )
     assert r.status_code == 400
+
+
+# ---- multi-board switching (uses /api/boards/select) ---------------------
+
+
+def test_select_switches_visible_board_data(tmp_path):
+    c = _client_with_boards(tmp_path)
+    # Board A: one frame.
+    a = c.post(
+        "/api/boards/create",
+        json={"name": "A", "folder": str(tmp_path), "filename": "a.json"},
+        headers=CSRF,
+    ).get_json()
+    c.post("/api/frames", json={"title": "A-Only"}, headers=CSRF)
+    # Board B (now active, so /api/frames sees B's data, which is empty).
+    b = c.post(
+        "/api/boards/create",
+        json={"name": "B", "folder": str(tmp_path), "filename": "b.json"},
+        headers=CSRF,
+    ).get_json()
+    c.post("/api/frames", json={"title": "B-Only"}, headers=CSRF)
+    # Currently active: B.
+    assert any(
+        fr["title"] == "B-Only"
+        for fr in c.get("/api/frames").get_json()
+    )
+    # Switch to A.
+    c.post("/api/boards/select", json={"id": a["id"]}, headers=CSRF)
+    titles = [fr["title"] for fr in c.get("/api/frames").get_json()]
+    assert "A-Only" in titles
+    assert "B-Only" not in titles
+    # /api/boards/active reflects the swap.
+    active = c.get("/api/boards/active").get_json()
+    assert active["id"] == a["id"]
+
+
+def test_mutations_on_one_board_do_not_leak_to_another(tmp_path):
+    c = _client_with_boards(tmp_path)
+    a = c.post(
+        "/api/boards/create",
+        json={"name": "A", "folder": str(tmp_path), "filename": "a.json"},
+        headers=CSRF,
+    ).get_json()
+    c.post("/api/frames", json={"title": "Stay-on-A"}, headers=CSRF)
+    c.post(
+        "/api/boards/create",
+        json={"name": "B", "folder": str(tmp_path), "filename": "b.json"},
+        headers=CSRF,
+    ).get_json()
+    c.post("/api/frames", json={"title": "B-frame"}, headers=CSRF)
+    # Switch to A; B's frame must not be visible.
+    c.post("/api/boards/select", json={"id": a["id"]}, headers=CSRF)
+    titles = [fr["title"] for fr in c.get("/api/frames").get_json()]
+    assert titles == ["Stay-on-A"]
+
+
+def test_create_app_registers_default_data_path(tmp_path):
+    data_file = tmp_path / "board.json"
+    app = create_app(
+        data_path=str(data_file),
+        registry_path=str(tmp_path / "boards.json"),
+    )
+    app.config["TESTING"] = True
+    c = app.test_client()
+    # The default board is registered and active on first boot.
+    active = c.get("/api/boards/active").get_json()
+    assert active["path"] == str(data_file)
+    # And mutations to it are persisted.
+    c.post("/api/frames", json={"title": "Default"}, headers=CSRF)
+    # Restart the app and confirm the file is loaded.
+    app2 = create_app(
+        data_path=str(data_file),
+        registry_path=str(tmp_path / "boards.json"),
+    )
+    app2.config["TESTING"] = True
+    c2 = app2.test_client()
+    titles = [fr["title"] for fr in c2.get("/api/frames").get_json()]
+    assert titles == ["Default"]
 

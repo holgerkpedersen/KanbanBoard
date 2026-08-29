@@ -110,6 +110,31 @@ html, body {
   color: transparent;
 }
 
+/* Board switcher button in the topbar */
+.board-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  max-width: 240px;
+}
+.board-switcher:hover {
+  border-color: var(--accent);
+}
+.board-switcher-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.board-switcher-caret {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* Theme picker in the topbar */
 .theme-picker { display: inline-flex; align-items: center; }
 .theme-picker select {
@@ -346,3 +371,134 @@ html, body {
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .empty-hint { color: var(--muted); font-size: 12px; padding: 6px; text-align: center; }
+
+/* ---- Board picker ----------------------------------------------------- */
+.board-modal-card {
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+}
+.board-picker-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 36vh;
+  overflow: auto;
+}
+.board-picker-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 4px;
+}
+.board-picker-item.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.board-picker-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 6px;
+}
+.board-picker-main:hover { background: var(--surface); }
+.board-picker-name { font-weight: 600; font-size: 14px; }
+.board-picker-path {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  word-break: break-all;
+}
+.board-picker-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+.board-picker-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 10px 8px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.board-picker-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--surface-2);
+}
+.board-picker-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  list-style: none;
+}
+.board-picker-section summary::-webkit-details-marker { display: none; }
+.board-picker-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.board-picker-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.board-picker-form input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+.board-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.board-picker-filename {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+.board-picker-help {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 6px 0;
+}
+.board-picker-help code {
+  background: var(--surface);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.board-picker-error {
+  background: rgba(214, 50, 74, 0.15);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin: 8px 0;
+}

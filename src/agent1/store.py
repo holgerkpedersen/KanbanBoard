@@ -1,9 +1,25 @@
 import json
 import os
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .models import Card, Frame
+
+
+def atomic_write_json(path: str, data: Any) -> None:
+    """Write ``data`` as JSON to ``path`` atomically (tmp + os.replace).
+
+    Shared by :class:`BoardStore` and the board registry so both use the
+    same crash-safe write semantics. The parent directory is created if
+    it doesn't exist.
+    """
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
 
 
 class BoardStore:
@@ -13,16 +29,43 @@ class BoardStore:
     startup and writes it back (atomically) after every mutation, so frames
     and cards survive process restarts. When ``path`` is ``None`` the store
     is purely in-memory (used by the test suite).
+
+    The store is bound to a single file. The board-switcher feature uses
+    :meth:`set_path` to atomically swap the active file at runtime; the
+    in-memory state is replaced and reloaded under the same lock that
+    serialises mutations, so concurrent writers can't observe a torn state.
     """
 
     def __init__(self, path: Optional[str] = None) -> None:
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._frames: Dict[str, Frame] = {}
         self._cards: Dict[str, Card] = {}
         self._frame_order: List[str] = []
-        self._path = path
+        self._path: Optional[str] = path
         if path:
             self._load()
+
+    @property
+    def path(self) -> Optional[str]:
+        """The on-disk file this store is bound to, or ``None`` for in-memory."""
+        with self._lock:
+            return self._path
+
+    def set_path(self, path: Optional[str]) -> None:
+        """Atomically rebind this store to a different file.
+
+        In-memory state is discarded and reloaded from ``path``. If ``path``
+        is ``None`` the store becomes a fresh in-memory board. Safe to call
+        while other requests are in flight; the same lock that serialises
+        mutations also serialises the swap.
+        """
+        with self._lock:
+            self._path = path
+            self._frames = {}
+            self._cards = {}
+            self._frame_order = []
+            if path:
+                self._load()
 
     # ---- persistence -------------------------------------------------------
     def _snapshot(self) -> Dict[str, object]:
@@ -38,14 +81,7 @@ class BoardStore:
     def _save(self) -> None:
         if not self._path:
             return
-        data = self._snapshot()
-        directory = os.path.dirname(self._path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        tmp = f"{self._path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, self._path)
+        atomic_write_json(self._path, self._snapshot())
 
     def _load(self) -> None:
         assert self._path is not None

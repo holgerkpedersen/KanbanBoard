@@ -30,12 +30,28 @@ const Api = {
   deleteCard: (id) => api("DELETE", `/api/cards/${id}`),
   moveCard: (id, frameId, index) =>
     api("POST", `/api/cards/${id}/move`, { frame_id: frameId, index }),
+
+  // Board management (multi-board support)
+  listBoards: () => api("GET", "/api/boards"),
+  getActiveBoard: () => api("GET", "/api/boards/active"),
+  createBoard: (name, folder, filename) =>
+    api("POST", "/api/boards/create", { name, folder, filename }),
+  openBoardFile: (payload) => api("POST", "/api/boards/open-file", payload),
+  selectBoard: (id) => api("POST", "/api/boards/select", { id }),
+  renameBoard: (id, name) => api("PUT", `/api/boards/${id}`, { name }),
+  duplicateBoard: (id, dest_path, new_name) =>
+    api("POST", `/api/boards/${id}/duplicate`, { dest_path, new_name }),
+  deleteBoard: (id, deleteFile) => {
+    const qs = deleteFile ? "?delete_file=true" : "";
+    return api("DELETE", `/api/boards/${id}${qs}`);
+  },
 };
 
 // ---- State ----------------------------------------------------------------
 const state = {
   frames: [], // [{ id, title, cards: [{id,title,text,tags,frame_id}] }]
   query: "",
+  activeBoard: null, // { id, name, path } — set on boot and after every switch
 };
 
 // ---- Sound effects (Web Audio synth, no asset files) -----------------------
@@ -501,3 +517,281 @@ if (themeSelect) {
     applyTheme(theme);
   });
 }
+
+// ---- Board manager --------------------------------------------------------
+// Lets the user create, open, switch, rename, duplicate, and delete boards.
+// On boot, the active board is loaded from the server and its frames
+// rendered; the rest of the app keeps working against that store until
+// the user picks a different one.
+const boardModal = $("#board-modal");
+const boardSwitcherBtn = $("#board-switcher");
+const boardNameEl = $("#board-name");
+const boardListEl = $("#board-list");
+const boardModalError = $("#board-modal-error");
+
+function setActiveBoardLabel(name) {
+  if (boardNameEl) boardNameEl.textContent = name || "Board";
+}
+
+function showBoardError(msg) {
+  if (!boardModalError) return;
+  boardModalError.textContent = msg;
+  boardModalError.hidden = false;
+}
+
+function clearBoardError() {
+  if (!boardModalError) return;
+  boardModalError.textContent = "";
+  boardModalError.hidden = true;
+}
+
+function renderBoardList(boards, activeId) {
+  if (!boardListEl) return;
+  boardListEl.replaceChildren();
+  if (!boards || boards.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "board-picker-empty";
+    empty.textContent = "No boards yet. Create one or open a file below.";
+    boardListEl.appendChild(empty);
+    return;
+  }
+  // Most-recently-opened first.
+  const sorted = [...boards].sort((a, b) =>
+    (b.last_opened || "").localeCompare(a.last_opened || "")
+  );
+  sorted.forEach((b) => {
+    const li = document.createElement("li");
+    li.className = "board-picker-item";
+    if (b.id === activeId) li.classList.add("is-active");
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "board-picker-main";
+    const nameEl = document.createElement("span");
+    nameEl.className = "board-picker-name";
+    nameEl.textContent = b.name;
+    const pathEl = document.createElement("span");
+    pathEl.className = "board-picker-path";
+    pathEl.textContent = b.path;
+    main.appendChild(nameEl);
+    main.appendChild(pathEl);
+    main.addEventListener("click", async () => {
+      try {
+        await switchToBoard(b.id);
+        closeBoardModal();
+      } catch (err) {
+        showBoardError(err.message);
+      }
+    });
+
+    const tools = document.createElement("div");
+    tools.className = "board-picker-tools";
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "icon-btn";
+    renameBtn.title = "Rename";
+    renameBtn.textContent = "✎";
+    renameBtn.addEventListener("click", async () => {
+      const next = prompt("Rename board", b.name);
+      if (!next || next === b.name) return;
+      try {
+        await Api.renameBoard(b.id, next);
+        await refreshBoardList();
+      } catch (err) {
+        showBoardError(err.message);
+      }
+    });
+    const dupBtn = document.createElement("button");
+    dupBtn.type = "button";
+    dupBtn.className = "icon-btn";
+    dupBtn.title = "Duplicate";
+    dupBtn.textContent = "⎘";
+    dupBtn.addEventListener("click", async () => {
+      const dest = prompt(
+        "Duplicate to (absolute path, must end in .json)",
+        b.path.replace(/(\.json)?$/, "-copy.json")
+      );
+      if (!dest) return;
+      try {
+        await Api.duplicateBoard(b.id, dest, b.name + " (copy)");
+        await refreshBoardList();
+      } catch (err) {
+        showBoardError(err.message);
+      }
+    });
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "icon-btn";
+    delBtn.title = "Delete (unregister)";
+    delBtn.textContent = "×";
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`Remove "${b.name}" from the list?`)) return;
+      const alsoFile = confirm(
+        `Also delete the file on disk?\n${b.path}\n\n` +
+          "Click OK to delete the file, Cancel to keep it on disk."
+      );
+      try {
+        await Api.deleteBoard(b.id, alsoFile);
+        await refreshBoardList();
+        // If we just deleted the active board, the server returns a new
+        // active; re-load to pick it up.
+        await loadActiveBoard();
+      } catch (err) {
+        showBoardError(err.message);
+      }
+    });
+    tools.appendChild(renameBtn);
+    tools.appendChild(dupBtn);
+    tools.appendChild(delBtn);
+
+    li.appendChild(main);
+    li.appendChild(tools);
+    boardListEl.appendChild(li);
+  });
+}
+
+async function refreshBoardList() {
+  const data = await Api.listBoards();
+  renderBoardList(data.boards || [], data.active);
+}
+
+async function switchToBoard(id) {
+  await Api.selectBoard(id);
+  await loadActiveBoard(/* reloadBoard= */ true);
+}
+
+async function loadActiveBoard(reloadBoard = false) {
+  const active = await Api.getActiveBoard();
+  state.activeBoard = active && active.id ? active : null;
+  setActiveBoardLabel(state.activeBoard ? state.activeBoard.name : "");
+  if (reloadBoard || state.frames.length === 0) {
+    state.frames = await Api.getBoard();
+    state.query = "";
+    const search = $("#search");
+    if (search) search.value = "";
+    render();
+  }
+}
+
+function openBoardModal() {
+  if (!boardModal) return;
+  clearBoardError();
+  refreshBoardList().catch((err) => showBoardError(err.message));
+  boardModal.classList.remove("hidden");
+}
+
+function closeBoardModal() {
+  if (!boardModal) return;
+  boardModal.classList.add("hidden");
+}
+
+if (boardSwitcherBtn) {
+  boardSwitcherBtn.addEventListener("click", openBoardModal);
+}
+
+// Backdrop / Close button dismiss the modal.
+if (boardModal) {
+  boardModal.querySelectorAll("[data-close]").forEach((el) => {
+    el.addEventListener("click", closeBoardModal);
+  });
+}
+
+// Create-new-board form.
+const boardCreateForm = $("#board-create-form");
+if (boardCreateForm) {
+  boardCreateForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearBoardError();
+    const name = $("#board-create-name").value.trim();
+    const folder = $("#board-create-folder").value.trim();
+    const filename = $("#board-create-filename").value.trim();
+    if (!name || !folder || !filename) return;
+    try {
+      await Api.createBoard(name, folder, filename);
+      boardCreateForm.reset();
+      $("#board-create-filename").value = "board.json";
+      await loadActiveBoard(true);
+      await refreshBoardList();
+    } catch (err) {
+      showBoardError(err.message);
+    }
+  });
+}
+
+// Open-by-path form (always-available fallback).
+const boardOpenPathForm = $("#board-open-path-form");
+if (boardOpenPathForm) {
+  boardOpenPathForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearBoardError();
+    const path = $("#board-open-path").value.trim();
+    const name = $("#board-open-name").value.trim();
+    if (!path) return;
+    try {
+      await Api.openBoardFile({ path, name });
+      boardOpenPathForm.reset();
+      await loadActiveBoard(true);
+      await refreshBoardList();
+    } catch (err) {
+      showBoardError(err.message);
+    }
+  });
+}
+
+// Browser File-System-Access API branch: when the browser supports it, the
+// "Pick file…" button uses the native picker and uploads the file's contents
+// to the server, which writes them into a managed uploads directory so
+// atomic-write semantics are preserved.
+const boardPickBtn = $("#board-pick-file");
+const boardPickFilename = $("#board-pick-filename");
+let pickedFile = null;
+if (boardPickBtn) {
+  if (window.showOpenFilePicker) {
+    boardPickBtn.addEventListener("click", async () => {
+      clearBoardError();
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          types: [
+            {
+              description: "Kanban board",
+              accept: { "application/json": [".json"] },
+            },
+          ],
+        });
+        const file = await handle.getFile();
+        const text = await file.text();
+        pickedFile = { name: file.name, text };
+        if (boardPickFilename) {
+          boardPickFilename.textContent = `Selected: ${file.name}`;
+        }
+        // Auto-submit on pick for the simplest UX.
+        await Api.openBoardFile({ name: file.name, content: text });
+        pickedFile = null;
+        if (boardPickFilename) boardPickFilename.textContent = "";
+        await loadActiveBoard(true);
+        await refreshBoardList();
+      } catch (err) {
+        // User cancelling the picker throws an AbortError — silent.
+        if (err && err.name === "AbortError") return;
+        showBoardError(err.message);
+      }
+    });
+  } else {
+    boardPickBtn.disabled = true;
+    boardPickBtn.title = "Not supported in this browser — use the path field below";
+  }
+}
+
+// ---- Boot -----------------------------------------------------------------
+// Load the active board + its frames on first paint. If there is no
+// active board yet (empty registry), the modal opens so the user can
+// pick or create one.
+(async function boot() {
+  try {
+    await loadActiveBoard(true);
+  } catch (err) {
+    // No active board: open the modal so the user can pick one.
+    setActiveBoardLabel("(none)");
+    openBoardModal();
+  }
+})();
