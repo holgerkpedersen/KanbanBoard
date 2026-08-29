@@ -135,9 +135,12 @@
       <details class="board-picker-section">
         <summary>Open file from disk…</summary>
         <p class="board-picker-help">
-          Pick an existing <code>.json</code> file from anywhere on your computer.
-          The browser's file picker is used when available; otherwise paste the
-          absolute path below.
+          Pick an existing <code>.json</code> file from anywhere on your
+          computer, or paste its absolute path below. Browsers don't share the
+          real filesystem path for security, so a picked file is uploaded to
+          the app's managed <code>uploads/</code> folder and registered from
+          there. To keep the file in its current location, paste its absolute
+          path instead.
         </p>
         <div class="board-picker-row">
           <button id="board-pick-file" type="button" class="btn">Pick file…</button>
@@ -146,14 +149,14 @@
         <form id="board-open-path-form" class="board-picker-form">
           <label>
             Absolute path
-            <input id="board-open-path" type="text" placeholder="C:\Users\you\Documents\my-board.json" required />
+            <input id="board-open-path" type="text" placeholder="C:\Users\you\Documents\my-board.json" />
           </label>
           <label>
             Display name (optional)
             <input id="board-open-name" type="text" maxlength="100" />
           </label>
           <div class="modal-actions">
-            <button type="submit" class="btn">Open</button>
+            <button id="board-open-submit" type="submit" class="btn">Open</button>
           </div>
         </form>
       </details>

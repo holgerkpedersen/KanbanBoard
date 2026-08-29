@@ -719,16 +719,33 @@ if (boardCreateForm) {
 }
 
 // Open-by-path form (always-available fallback).
+// The same form is used whether the user types a path, pastes one, or has
+// just picked a file via the File-System-Access picker above. When a file
+// has been picked, the browser can't give us its real absolute path for
+// security reasons — we fall back to sending the file's content with the
+// requested display name. Either way, the user just clicks Open.
 const boardOpenPathForm = $("#board-open-path-form");
+const boardOpenPathInput = $("#board-open-path");
+const boardOpenNameInput = $("#board-open-name");
 if (boardOpenPathForm) {
   boardOpenPathForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     clearBoardError();
-    const path = $("#board-open-path").value.trim();
-    const name = $("#board-open-name").value.trim();
-    if (!path) return;
+    const path = boardOpenPathInput.value.trim();
+    const name = boardOpenNameInput.value.trim();
     try {
-      await Api.openBoardFile({ path, name });
+      if (pickedFile) {
+        // Picked-file mode: send the content. Server writes to the
+        // managed uploads dir and registers it under `name` (or the
+        // file's own name if the user left the field empty).
+        const displayName = name || pickedFile.name.replace(/\.json$/i, "");
+        await Api.openBoardFile({ name: displayName, content: pickedFile.text });
+        clearPickedFile();
+      } else if (path) {
+        await Api.openBoardFile({ path, name });
+      } else {
+        return; // nothing to do
+      }
       boardOpenPathForm.reset();
       await loadActiveBoard(true);
       await refreshBoardList();
@@ -738,10 +755,24 @@ if (boardOpenPathForm) {
   });
 }
 
+function clearPickedFile() {
+  pickedFile = null;
+  if (boardPickFilename) boardPickFilename.textContent = "";
+  if (boardOpenPathInput) {
+    boardOpenPathInput.value = "";
+    boardOpenPathInput.placeholder = "C:\\path\\to\\board.json";
+  }
+  if (boardOpenNameInput) boardOpenNameInput.value = "";
+  const openBtn = $("#board-open-submit");
+  if (openBtn) openBtn.textContent = "Open";
+}
+
 // Browser File-System-Access API branch: when the browser supports it, the
-// "Pick file…" button uses the native picker and uploads the file's contents
-// to the server, which writes them into a managed uploads directory so
-// atomic-write semantics are preserved.
+// "Pick file…" button opens the native picker. We read the file's contents
+// but do NOT auto-submit — instead we pre-fill the form so the user clicks
+// "Open" to confirm. Browsers won't expose the real absolute path to JS for
+// security reasons, so the "Absolute path" field stays empty and we send
+// the content with the name.
 const boardPickBtn = $("#board-pick-file");
 const boardPickFilename = $("#board-pick-filename");
 let pickedFile = null;
@@ -764,12 +795,19 @@ if (boardPickBtn) {
         if (boardPickFilename) {
           boardPickFilename.textContent = `Selected: ${file.name}`;
         }
-        // Auto-submit on pick for the simplest UX.
-        await Api.openBoardFile({ name: file.name, content: text });
-        pickedFile = null;
-        if (boardPickFilename) boardPickFilename.textContent = "";
-        await loadActiveBoard(true);
-        await refreshBoardList();
+        if (boardOpenPathInput) {
+          // Browsers can't share the real absolute path; the field is
+          // disabled and shows a hint. The picked content will be sent
+          // when the user clicks "Open".
+          boardOpenPathInput.value = "";
+          boardOpenPathInput.placeholder = `(picked: ${file.name} — content will be uploaded)`;
+          boardOpenPathInput.disabled = true;
+        }
+        if (boardOpenNameInput) {
+          boardOpenNameInput.value = file.name.replace(/\.json$/i, "");
+        }
+        const openBtn = $("#board-open-submit");
+        if (openBtn) openBtn.textContent = `Open "${file.name}"`;
       } catch (err) {
         // User cancelling the picker throws an AbortError — silent.
         if (err && err.name === "AbortError") return;
@@ -778,8 +816,22 @@ if (boardPickBtn) {
     });
   } else {
     boardPickBtn.disabled = true;
-    boardPickBtn.title = "Not supported in this browser — use the path field below";
+    boardPickBtn.title = "Not supported in this browser — type a path below";
   }
+}
+
+// Re-enable the path field if the user clears the picked file or types in
+// the field directly. Any input in the form clears the picked-file state
+// (the user is now editing manually rather than relying on the pick).
+function clearPickOnEdit() {
+  if (pickedFile) clearPickedFile();
+}
+if (boardOpenPathInput) {
+  boardOpenPathInput.addEventListener("input", clearPickOnEdit);
+  boardOpenPathInput.addEventListener("focus", clearPickOnEdit);
+}
+if (boardOpenNameInput) {
+  boardOpenNameInput.addEventListener("input", clearPickOnEdit);
 }
 
 // ---- Boot -----------------------------------------------------------------
