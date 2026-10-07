@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 from src.agent1 import kanban_sync as ks
-from src.agent1.models import Frame
+from src.agent1.models import Card, Frame
 from src.agent1.store import BoardStore
 
 # Frame titles as the real seed boards define them (opaque ids, real titles).
@@ -475,3 +475,83 @@ def test_queue_names_describe_direction_not_side():
     assert ks.QUEUE_KANBAN_TO_AGENT1.parent == ks.DATA_DIR
     assert ks.QUEUE_AGENT1_TO_KANBAN.name == "queue-agent1-to-kanban"
     assert ks.QUEUE_KANBAN_TO_AGENT1.name == "queue-kanban-to-agent1"
+
+
+# ---------------------------------------------------------------------------
+# Echo suppression — an issue_create that Agent1 already has a card for must
+# not add a second card, or the two sides ping-pong forever.
+# ---------------------------------------------------------------------------
+
+def _envelope(issue_id, title="Echoed issue"):
+    return {
+        "op": "issue_create",
+        "source_id": issue_id,
+        "payload": {"id": issue_id, "title": title, "status": "open"},
+    }
+
+
+def _seed_card(store, card_id, title="Original card"):
+    """Put a real card on the board and return it (mirrors the Agent1-side card)."""
+    frame_id = _resolve_first_frame(store)
+    card = Card(id=card_id, title=title, text="", frame_id=frame_id, tags=[], system="harnessfix")
+    store.add_card(card, frame_id)
+    return card
+
+
+def _resolve_first_frame(store):
+    return store.get_all_frames()[0].id
+
+
+def test_issue_create_echo_for_known_issue_does_not_add_second_card(store):
+    """The exact loop: Agent1 mirrors a card to an issue, then echoes back.
+
+    Agent1's ``_apply_card_create`` records issue→card and calls
+    ``make_issue()``, which enqueues ``issue_create`` for that same issue.
+    Kanban must recognise it already has the card.
+    """
+    # Agent1 side of the round trip: the card exists and is mapped to the issue.
+    _seed_card(store, "card-orig")
+    ks.link_ids("iss-echo", "card-orig")
+
+    assert ks._apply_issue_create(_envelope("iss-echo"), store) is True
+
+    assert _only_card(store).id == "card-orig", "echo must not create a second card"
+    assert ks.resolve_id("iss-echo") == "card-orig", "mapping must be untouched"
+
+
+def test_issue_create_echo_keeps_board_stable_across_repeated_polls(store):
+    """Repeated echoes must not grow the board — no unbounded ping-pong."""
+    _seed_card(store, "card-orig")
+    ks.link_ids("iss-echo", "card-orig")
+    msg = _envelope("iss-echo")
+
+    for _ in range(5):
+        assert ks._apply_issue_create(msg, store) is True
+
+    assert len(store.get_all_cards()) == 1
+    assert _only_card(store).id == "card-orig"
+    assert ks.resolve_id("iss-echo") == "card-orig"
+
+
+def test_issue_create_still_creates_card_for_new_issue(store):
+    """The guard must not over-suppress: a genuinely new issue still lands."""
+    assert ks._apply_issue_create(_envelope("iss-new", title="Fresh"), store) is True
+
+    card = _only_card(store)
+    assert card.title == "Fresh"
+    assert ks.resolve_id("iss-new") == card.id
+
+
+def test_issue_create_ignores_stale_mapping_to_deleted_card(store):
+    """A mapping pointing at a card that no longer exists must not block create.
+
+    If the card was deleted from the board, the stale entry must not stop the
+    issue from being materialised again.
+    """
+    ks.link_ids("iss-gone", "card-deleted")  # no such card on the board
+
+    assert ks._apply_issue_create(_envelope("iss-gone", title="Recreated"), store) is True
+
+    card = _only_card(store)
+    assert card.title == "Recreated"
+    assert ks.resolve_id("iss-gone") == card.id

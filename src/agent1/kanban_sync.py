@@ -314,6 +314,22 @@ def _apply_issue_create(msg: dict[str, Any], store: Any) -> bool:
         return False
     data = issue_to_card_data(issue)
 
+    # Idempotency guard.  The id map is bidirectional, and Agent1's card→issue
+    # apply path calls ``make_issue()``, which enqueues an ``issue_create``
+    # straight back here.  Without this check that echo would add a *second*
+    # card for the same issue; the second card maps to the same issue, so the
+    # next poll would echo again and the board would grow without bound.
+    source_id = msg.get("source_id", "") or issue.get("id", "")
+    if source_id:
+        existing_card_id = resolve_id(source_id)
+        if existing_card_id and store.get_card(existing_card_id) is not None:
+            logger.info(
+                "issue_create: card %s already exists for issue %s, ignoring echo",
+                existing_card_id,
+                source_id,
+            )
+            return True
+
     status = _status_of(issue)
     target_frame_id = _resolve_frame_id(store, ISSUE_TO_FRAME.get(status, "Ideas"))
     if target_frame_id is None:
