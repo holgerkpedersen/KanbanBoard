@@ -8,6 +8,7 @@ from flask import (
     Response,
 )
 from typing import Any, Dict
+import os
 import uuid
 
 from .store import BoardStore
@@ -19,6 +20,20 @@ from .security import (
     has_csrf_header,
     apply_security_headers,
 )
+
+
+def _get_kanban_sync():
+    """Lazy-load kanban_sync to avoid circular imports."""
+    try:
+        from . import kanban_sync  # type: ignore[import-not-found]
+        return kanban_sync
+    except ImportError:
+        return None
+
+
+def _should_sync() -> bool:
+    """Check if Kanban sync is enabled via environment variable."""
+    return os.environ.get("KANBAN_SYNC_ENABLED", "0") == "1" and _get_kanban_sync() is not None
 
 
 def current_store() -> BoardStore:
@@ -63,6 +78,17 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             system=system,
         )
         store.add_card(card, frame_id)
+
+        # Enqueue card creation to Agent1 if sync is enabled
+        if _should_sync():
+            kb = _get_kanban_sync()
+            if kb:
+                kb.enqueue({
+                    "op": "card_create",
+                    "source_id": card.id,
+                    "payload": card.to_dict(),
+                })
+
         resp = jsonify(card.to_dict())
         resp.status_code = 201
         return apply_security_headers(resp)
@@ -114,6 +140,17 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
                 return jsonify({"error": "frame not found"}), 404
             card.frame_id = fid
         store.update_card(card)
+
+        # Enqueue card update to Agent1 if sync is enabled
+        if _should_sync():
+            kb = _get_kanban_sync()
+            if kb:
+                kb.enqueue({
+                    "op": "card_update",
+                    "source_id": card.id,
+                    "payload": card.to_dict(),
+                })
+
         return apply_security_headers(jsonify(card.to_dict()))
 
     @bp.route("/<card_id>", methods=["DELETE"])
@@ -122,7 +159,21 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             return jsonify({"error": "csrf"}), 403
         if current_store().get_card(card_id) is None:
             return jsonify({"error": "not found"}), 404
-        current_store().delete_card(card_id)
+        store = current_store()
+        card = store.get_card(card_id)
+
+        store.delete_card(card_id)
+
+        # Enqueue card deletion to Agent1 if sync is enabled
+        if _should_sync():
+            kb = _get_kanban_sync()
+            if kb:
+                kb.enqueue({
+                    "op": "card_delete",
+                    "source_id": card.id,
+                    "payload": {"frame_id": card.frame_id},
+                })
+
         resp = make_response("", 204)
         return apply_security_headers(resp)
 
@@ -142,6 +193,17 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
         index = index if isinstance(index, int) else None
         if not store.move_card(card_id, fid, index):
             return jsonify({"error": "move failed"}), 400
+
+        # Enqueue card move to Agent1 if sync is enabled
+        if _should_sync():
+            kb = _get_kanban_sync()
+            if kb:
+                kb.enqueue({
+                    "op": "card_move",
+                    "source_id": card.id,
+                    "payload": {"frame_id": fid},
+                })
+
         return apply_security_headers(jsonify(card.to_dict()))
 
     return bp

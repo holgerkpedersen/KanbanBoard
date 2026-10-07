@@ -15,8 +15,12 @@ working unchanged.
 
 from __future__ import annotations
 
+import atexit
+import logging
 import os
 import secrets
+import shutil
+import tempfile
 import threading
 from typing import Optional
 
@@ -30,8 +34,9 @@ from .routes_cards import create_card_blueprint
 from .routes_boards import create_boards_blueprint
 from .security import apply_security_headers
 
-# Default on-disk locations. Tests call create_app() with no path, so
-# they stay purely in-memory and deterministic.
+# Default on-disk locations for the *production* app. The module-level
+# ``app`` below passes these explicitly. Tests call create_app() with no
+# path, which keeps them in-memory and deterministic.
 DEFAULT_WORKING_DIR = os.environ.get("KANBAN_WORKING_DIR", "data")
 DEFAULT_CATALOG_DIR = os.environ.get(
     "KANBAN_CATALOG_DIR", os.path.join(DEFAULT_WORKING_DIR, "boards")
@@ -43,6 +48,8 @@ DEFAULT_UPLOADS_DIR = os.environ.get(
     "KANBAN_UPLOADS_DIR", os.path.join(DEFAULT_WORKING_DIR, "uploads")
 )
 MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # cap for any future upload path
+
+logger = logging.getLogger(__name__)
 
 
 def _make_live_holder() -> dict:
@@ -79,14 +86,22 @@ def create_app(
     app.config["TESTING"] = False
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
+    # ``working_dir is None`` means "no on-disk home": the app stays
+    # in-memory and hermetic, exactly as the docstring above promises.
+    # The board routes still need *some* folder to point at, so give them
+    # a throwaway temp dir that no other run — and, crucially, not the
+    # real ``data/`` board — can see. Without this, a bare
+    # ``create_app()`` in a test would hydrate the user's live board from
+    # ``data/`` and write test frames/cards into it.
     if working_dir is None:
-        working_dir = DEFAULT_WORKING_DIR
+        working_dir = tempfile.mkdtemp(prefix="kanban-ephemeral-")
+        atexit.register(shutil.rmtree, working_dir, True)
     if catalog_dir is None:
-        catalog_dir = DEFAULT_CATALOG_DIR
+        catalog_dir = os.path.join(working_dir, "boards")
     if registry_path is None:
-        registry_path = DEFAULT_REGISTRY_PATH
+        registry_path = os.path.join(working_dir, "active.json")
     if uploads_dir is None:
-        uploads_dir = DEFAULT_UPLOADS_DIR
+        uploads_dir = os.path.join(working_dir, "uploads")
 
     os.makedirs(working_dir, exist_ok=True)
     os.makedirs(catalog_dir, exist_ok=True)
@@ -142,6 +157,20 @@ def create_app(
     app.register_blueprint(cards_bp, url_prefix="/api/cards")
     app.register_blueprint(boards_bp, url_prefix="/api/boards")
 
+    # Start Kanban sync background thread if enabled.
+    # The processor needs the live store which is only available after
+    # before_request runs — it looks up the holder from app.config at runtime.
+    _sync_thread: threading.Thread | None = None
+    if os.environ.get("KANBAN_SYNC_ENABLED", "0") == "1":
+        try:
+            from . import kanban_sync as kb_sync
+            proc = kb_sync.QueueProcessor(app, poll_interval=5.0)
+            _sync_thread = threading.Thread(target=proc.run_forever, daemon=True)
+            _sync_thread.start()
+            logger.info("Kanban sync thread started")
+        except Exception as exc:  # noqa: BLE001 — don't crash the app on sync failure
+            logger.error("Failed to start Kanban sync thread: %s", exc)
+
     @app.get("/")
     def index() -> Response:
         # Per-request nonce so the inline anti-flash theme script is allowed
@@ -160,7 +189,14 @@ def create_app(
     return app
 
 
-app: Flask = create_app()
+# Production entry point: opt into the real on-disk locations explicitly,
+# since a bare create_app() is now hermetic (in-memory).
+app: Flask = create_app(
+    working_dir=DEFAULT_WORKING_DIR,
+    catalog_dir=DEFAULT_CATALOG_DIR,
+    registry_path=DEFAULT_REGISTRY_PATH,
+    uploads_dir=DEFAULT_UPLOADS_DIR,
+)
 
 
 if __name__ == "__main__":
