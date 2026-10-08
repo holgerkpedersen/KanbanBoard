@@ -20,6 +20,7 @@ import logging
 import os
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
 from typing import Optional
@@ -50,6 +51,12 @@ DEFAULT_UPLOADS_DIR = os.environ.get(
 MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # cap for any future upload path
 
 logger = logging.getLogger(__name__)
+
+# The sync processor this process started, if any. create_app() reuses this
+# handle for every later call, so exactly one daemon poller runs per process;
+# module-private — no request path consumes it (see the sync block in
+# create_app), and a leaked reference is only an exit-time shutdown hook.
+_SYNC_HANDLES: list = []
 
 
 def _make_live_holder() -> dict:
@@ -157,19 +164,55 @@ def create_app(
     app.register_blueprint(cards_bp, url_prefix="/api/cards")
     app.register_blueprint(boards_bp, url_prefix="/api/boards")
 
-    # Start Kanban sync background thread if enabled.
-    # The processor needs the live store which is only available after
-    # before_request runs — it looks up the holder from app.config at runtime.
-    _sync_thread: threading.Thread | None = None
+    # Start one Kanban sync background thread per process, if enabled. The
+    # processor reads the live store from app.config at run_once() time, and
+    # importing this module already ran create_app() once for the production
+    # app — so every later call (extra apps in tests, helper scripts) must
+    # reuse that first processor instead of spawning another daemon poller on
+    # the same queue dirs. Each extra poller widens the window where a kill
+    # lands messages.jsonl mid-append: the reader then silently drops the torn
+    # line while advancing past it (see kanban_sync.read_queue). The handle is
+    # module-private — no request path consumes it, so callers cannot reach
+    # the live app through it; an extra create_app() only re-points which app a
+    # processor reads its store from.
     if os.environ.get("KANBAN_SYNC_ENABLED", "0") == "1":
-        try:
-            from . import kanban_sync as kb_sync
-            proc = kb_sync.QueueProcessor(app, poll_interval=5.0)
-            _sync_thread = threading.Thread(target=proc.run_forever, daemon=True)
-            _sync_thread.start()
-            logger.info("Kanban sync thread started")
-        except Exception as exc:  # noqa: BLE001 — don't crash the app on sync failure
-            logger.error("Failed to start Kanban sync thread: %s", exc)
+        _sync_handles = getattr(sys.modules[__name__], "_SYNC_HANDLES", None)
+        # The module sentinel starts as [] ("no processor yet"), so an
+        # `is None` test never fires: it must be falsy, not None, for the
+        # first sync-enabled app to actually construct the processor.
+        if not _sync_handles:
+            # First sync-enabled app in this process becomes the processor's
+            # app — the one and only processor, registered as a shutdown hook.
+            try:
+                from . import kanban_sync as kb_sync
+                proc = kb_sync.QueueProcessor(app, poll_interval=5.0)
+                # The processor runs on a daemon thread; at interpreter exit
+                # daemon threads are killed abruptly and can be torn off
+                # mid-append — an fsync'd tail write is no defence against a
+                # kill -9-style exit-time teardown. Stop the poller promptly on
+                # normal shutdown so it exits its 100 ms tick loop between
+                # batches; a blocked processor never delays exit beyond one
+                # poll interval (stop() only sets the flag, runs in parallel).
+                atexit.register(proc.stop)
+                # Run the poller on its own daemon thread. Without the start()
+                # the processor is constructed but never polls, so an enabled
+                # sync silently drops every queued message.
+                threading.Thread(target=proc.run_forever, daemon=True).start()
+                _sync_handles = [proc]
+                sys.modules[__name__]._SYNC_HANDLES = _sync_handles
+            except Exception as exc:  # noqa: BLE001 — don't crash the app on sync failure
+                logger.error("Failed to start Kanban sync thread: %s", exc)
+            else:
+                logger.info("Kanban sync thread started")
+        elif _sync_handles:
+            # Reuse the process's first processor: it looks the live store up
+            # from app.config at run_once() time, so it serves every app in
+            # this process — a second poller on the same queue dirs adds
+            # nothing but mid-batch kill windows.
+            _sync_handles[0].app = app
+            logger.info("Reusing the process's sync processor for this app")
+        else:
+            logger.warning("Kanban sync enabled, but no processor is available to start")
 
     @app.get("/")
     def index() -> Response:
@@ -190,7 +233,8 @@ def create_app(
 
 
 # Production entry point: opt into the real on-disk locations explicitly,
-# since a bare create_app() is now hermetic (in-memory).
+# since a bare create_app() is now hermetic (in-memory). Defined after the
+# factory so `_SYNC_HANDLES` already exists when the production app calls it.
 app: Flask = create_app(
     working_dir=DEFAULT_WORKING_DIR,
     catalog_dir=DEFAULT_CATALOG_DIR,

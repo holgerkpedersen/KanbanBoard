@@ -44,12 +44,32 @@ class _StubProcessor:
     def run_forever(self):
         type(self).started = True
 
+    def stop(self):
+        """Shutdown hook target; create_app() registers this at exit time."""
+        pass
+
 
 class _BoomProcessor:
     """A processor whose construction fails, exercising the except branch."""
 
     def __init__(self, app, poll_interval=5.0):
         raise RuntimeError("sync boom")
+
+
+@pytest.fixture(autouse=True)
+def _reset_sync_handles():
+    """Give each test the "no processor yet" state.
+
+    ``create_app()`` deliberately keeps one processor per process (a second
+    poller on the same queue dirs only widens the mid-append kill window), so
+    the module sentinel persists across tests. Without resetting it, whichever
+    sync-enabled test runs first consumes the construct-and-start branch and
+    every later test silently takes the reuse branch instead.
+    """
+    saved = list(getattr(app_module, "_SYNC_HANDLES", []))
+    app_module._SYNC_HANDLES = []
+    yield
+    app_module._SYNC_HANDLES = saved
 
 
 @pytest.fixture()
@@ -75,13 +95,35 @@ def test_create_app_with_sync_enabled_does_not_raise(sync_enabled):
 
 
 def test_create_app_with_sync_enabled_starts_thread(sync_enabled):
-    """The happy path really does start the processor."""
+    """The happy path really starts the processor on a daemon thread.
+
+    ``create_app()`` must hand ``run_forever`` to a real ``threading.Thread``
+    and ``start()`` it. Asserting only on a flag set inside ``run_forever``
+    would race the thread; instead capture the thread object and join it, so
+    the assertion is deterministic and also proves the thread is a daemon.
+    """
     from src.agent1 import kanban_sync as ks
 
     _StubProcessor.started = False
     sync_enabled.setattr(ks, "QueueProcessor", _StubProcessor)
 
+    started: list = []
+    real_thread = app_module.threading.Thread
+
+    class _RecordingThread(real_thread):  # type: ignore[misc, valid-type]
+        def start(self):  # noqa: D102 — record, then delegate to the real one
+            started.append(self)
+            super().start()
+
+    sync_enabled.setattr(app_module.threading, "Thread", _RecordingThread)
+
     create_app()
+
+    assert len(started) == 1, "create_app() must start exactly one poller thread"
+    poller = started[0]
+    assert poller.daemon is True
+    poller.join(timeout=5.0)
+    assert not poller.is_alive(), "the stub poller must have exited"
     assert _StubProcessor.started is True
 
 
