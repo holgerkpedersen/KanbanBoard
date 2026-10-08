@@ -485,11 +485,49 @@ def _process_single_message(msg: dict[str, Any], store: Any) -> bool:
         return False
 
 
+def _quarantine_malformed(
+    queue_dir: Path, idx: int, line: str, exc: Exception
+) -> None:
+    """Preserve an unparseable queue line instead of losing it to the log.
+
+    A line that is not JSON can never be retried into success, so re-reading it
+    forever is pointless — but silently dropping it destroys the only copy of
+    whatever the sender wrote.  Quarantining satisfies both: the offset moves
+    past the bad line and the raw bytes survive for inspection.
+    """
+    try:
+        dl_dir = _dead_letter_dir(queue_dir)
+        dl_dir.mkdir(parents=True, exist_ok=True)
+        dl_file = dl_dir / f"malformed_line_{idx}.jsonl"
+        dl_file.write_text(
+            json.dumps(
+                {"seq": idx + 1, "error": str(exc), "raw": line},
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        logger.error(
+            "Quarantined malformed JSON from queue line %d to %s: %s",
+            idx, dl_file, exc,
+        )
+    except OSError as write_exc:  # noqa: BLE001 — never break the read loop
+        logger.error(
+            "Could not quarantine malformed queue line %d (%s); line dropped",
+            idx, write_exc,
+        )
+
+
 def read_queue(queue_dir: Path) -> tuple[list[dict[str, Any]], int]:
     """Read new lines from the queue's messages.jsonl starting at offset.txt.
 
-    Returns (new_messages, next_offset).
+    Returns (new_messages, next_offset).  A line with invalid JSON can never
+    be retried into success, so it is quarantined to the dead-letter
+    directory and the offset advances past it.  Re-reading it forever was
+    the old behaviour: one bad byte re-logged an error on every poll for
+    the life of the queue, and the bytes were lost to nothing but the log.
     """
+    queue_dir = queue_dir.resolve()
     msg_file = queue_dir / "messages.jsonl"
     if not msg_file.exists():
         return [], 0
@@ -525,14 +563,21 @@ def read_queue(queue_dir: Path) -> tuple[list[dict[str, Any]], int]:
             msg = json.loads(line)
             new_messages.append(msg)
         except json.JSONDecodeError as exc:
-            logger.warning("Skipping malformed JSON in queue at line %d: %s", idx, exc)
+            _quarantine_malformed(queue_dir, idx, line, exc)
 
     return new_messages, next_offset
 
 
 def advance_offset(queue_dir: Path, offset: int) -> None:
-    """Update the queue's offset.txt to mark messages as processed."""
-    (queue_dir / "offset.txt").write_text(str(offset), encoding="utf-8")
+    """Update the queue's offset.txt to mark messages as processed.
+
+    Guarded by the per-queue lock: the offset is shared state and an
+    unguarded write can lose an update when the poller thread and a manual
+    ``--process-in`` run overlap.
+    """
+    queue_dir = queue_dir.resolve()
+    with _seq_lock_for(queue_dir):
+        (queue_dir / "offset.txt").write_text(str(offset), encoding="utf-8")
 
 
 def _dead_letter_dir(queue_dir: Path) -> Path:
@@ -544,7 +589,7 @@ def _dead_letter_dir(queue_dir: Path) -> Path:
     return DEAD_LETTER_DIR if DEAD_LETTER_DIR is not None else queue_dir / "dead_letters"
 
 
-def _record_failure(queue_dir: Path, msg: dict[str, Any], next_offset: int) -> None:
+def _record_failure(queue_dir: Path, msg: dict[str, Any]) -> None:
     """Persist an incremented retry_count so retries can actually accumulate.
 
     The queue is an append-only JSONL log, so a failed message is rewritten at
@@ -598,7 +643,7 @@ def process_inbound(store: Any, queue_dir: Path | None = None) -> int:
             applied += 1
         except Exception:
             logger.exception("Failed to apply %s message: %r", op, msg)
-            _record_failure(queue_dir, msg, next_offset)
+            _record_failure(queue_dir, msg)
 
     if new_messages:
         advance_offset(queue_dir, next_offset)

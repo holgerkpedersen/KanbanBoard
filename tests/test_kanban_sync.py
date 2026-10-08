@@ -321,6 +321,67 @@ def test_read_queue_skips_blank_and_malformed_lines(store, tmp_path):
     assert offset == 3
 
 
+def test_read_queue_quarantines_malformed_line(store, tmp_path):
+    """A bad JSONL line must be preserved, not dropped into the log.
+
+    This side used to log ``Skipping malformed JSON`` and lose the raw bytes.
+    The line can never be retried into success, so the offset still advances
+    past it — but the only copy of what the sender wrote must survive under
+    ``dead_letters/``.  Pins the port of Agent1's ``_quarantine_malformed``.
+    """
+    qdir = tmp_path / "queue-agent1-in"
+    qdir.mkdir()
+    (qdir / "messages.jsonl").write_text(
+        '{"seq": 1, "op": "issue_create", "source_id": "ok", "payload": {"title": "t"}}\n'
+        "{not valid json}\n",
+        encoding="utf-8",
+    )
+
+    messages, offset = ks.read_queue(qdir)
+
+    # The good line still comes through and the offset clears the bad one.
+    assert len(messages) == 1
+    assert messages[0]["source_id"] == "ok"
+    assert offset == 2
+
+    quarantined = list((qdir / "dead_letters").glob("malformed_line_*.jsonl"))
+    assert len(quarantined) == 1, f"expected one quarantined line, got {quarantined}"
+    record = json.loads(quarantined[0].read_text(encoding="utf-8").splitlines()[0])
+    assert record["raw"] == "{not valid json}"
+    assert "error" in record
+
+
+def test_advance_offset_is_serialised_per_queue(tmp_path):
+    """The offset write must hold the per-queue lock.
+
+    ``offset.txt`` is shared state: an unguarded write can lose an update when
+    the poller thread and a manual ``--process-in`` run overlap.
+    """
+    qdir = tmp_path / "queue-agent1-in"
+    qdir.mkdir()
+
+    held = []
+    real_lock = ks._seq_lock_for(qdir)
+
+    class _SpyLock:
+        def __enter__(self):
+            held.append(True)
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc):
+            return real_lock.__exit__(*exc)
+
+    original = ks._seq_lock_for
+    try:
+        ks._seq_lock_for = lambda d: _SpyLock()
+        ks.advance_offset(qdir, 7)
+    finally:
+        ks._seq_lock_for = original
+
+    assert held == [True], "advance_offset must write the offset under the lock"
+    assert (qdir / "offset.txt").read_text(encoding="utf-8") == "7"
+
+
 def test_read_queue_missing_file_is_empty(tmp_path):
     messages, offset = ks.read_queue(tmp_path / "nope")
     assert messages == []
