@@ -331,9 +331,9 @@ def test_read_queue_quarantines_malformed_line(store, tmp_path):
     """
     qdir = tmp_path / "queue-agent1-in"
     qdir.mkdir()
+    good = json.dumps({"seq": 1, "op": "issue_create", "source_id": "ok"})
     (qdir / "messages.jsonl").write_text(
-        '{"seq": 1, "op": "issue_create", "source_id": "ok", "payload": {"title": "t"}}\n'
-        "{not valid json}\n",
+        good + "\n{not valid json}\n",
         encoding="utf-8",
     )
 
