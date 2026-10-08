@@ -194,14 +194,22 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
         if not store.move_card(card_id, fid, index):
             return jsonify({"error": "move failed"}), 400
 
-        # Enqueue card move to Agent1 if sync is enabled
+        # Enqueue card move to Agent1 if sync is enabled.
+        # The frame *title* travels with the opaque frame id: Agent1 maps a
+        # column to an issue status by name ("Finished" -> resolved), and a
+        # uuid can never be looked up in that table.  Sending only the id made
+        # every move fall back to "open".
         if _should_sync():
             kb = _get_kanban_sync()
             if kb:
+                moved_frame = store.get_frame(fid)
                 kb.enqueue({
                     "op": "card_move",
                     "source_id": card.id,
-                    "payload": {"frame_id": fid},
+                    "payload": {
+                        "frame_id": fid,
+                        "frame_title": moved_frame.title if moved_frame else "",
+                    },
                 })
 
         return apply_security_headers(jsonify(card.to_dict()))
