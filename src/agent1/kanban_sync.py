@@ -667,6 +667,9 @@ class QueueProcessor:
         self.queue_dir = queue_dir
         self.poll_interval = poll_interval
         self._stop_event = threading.Event()
+        # Set while the per-board gate is holding messages back, so we log
+        # the condition once instead of once per poll.
+        self._gate_logged = False
 
     def run_once(self) -> int:
         """Process one batch of pending messages. Returns count applied."""
@@ -675,6 +678,21 @@ class QueueProcessor:
             if holder is None or holder["store"] is None:
                 return 0
             store = holder["store"]
+            # Per-board opt-in gate: while the active board has not allowed
+            # agent1 sync we HOLD messages in the queue (no offset advance)
+            # instead of applying them to a board that opted out. They get
+            # picked up once a synced board becomes active; duplicate
+            # protection for re-applied issue_create lives in _apply_issue_create.
+            allows = getattr(store, "sync_allowed", None)
+            if callable(allows) and not allows("agent1"):
+                if not self._gate_logged:
+                    logger.info(
+                        "Holding inbound queue %s: active board has agent1 sync disabled",
+                        self.queue_dir,
+                    )
+                    self._gate_logged = True
+                return 0
+            self._gate_logged = False
             return process_inbound(store, self.queue_dir)
         except Exception as exc:
             logger.error("QueueProcessor error: %s", exc, exc_info=True)

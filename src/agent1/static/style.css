@@ -135,6 +135,36 @@ html, body {
   color: var(--muted);
 }
 
+/* Per-board Agent1 sync toggle in the topbar (next to board switcher) */
+.sync-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.sync-toggle:hover {
+  border-color: var(--accent);
+}
+.sync-toggle input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+/* Checked = linked to Agent1: highlight like the switcher's hover state */
+.sync-toggle:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* No board selected (or mid-refresh): dimmed + not clickable */
+.sync-toggle:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Theme picker in the topbar */
 .theme-picker { display: inline-flex; align-items: center; }
 .theme-picker select {

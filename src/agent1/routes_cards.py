@@ -32,8 +32,22 @@ def _get_kanban_sync():
 
 
 def _should_sync() -> bool:
-    """Check if Kanban sync is enabled via environment variable."""
-    return os.environ.get("KANBAN_SYNC_ENABLED", "0") == "1" and _get_kanban_sync() is not None
+    """Return True when card operations should be synced to Agent1.
+
+    Two independent gates must both pass (layered control):
+
+    1. the process-level master switch ``KANBAN_SYNC_ENABLED=1`` (env var), and
+    2. the *active board* has opted in to agent1 sync via its on-disk
+       ``"sync"`` map — a per-board setting the user toggles in the UI.
+
+    A board without the opt-in never emits card ops, so unlinked boards can't
+    pollute Agent1's issue ledger or queue.
+    """
+    if os.environ.get("KANBAN_SYNC_ENABLED", "0") != "1":
+        return False
+    if _get_kanban_sync() is None:
+        return False
+    return current_store().sync_allowed("agent1")
 
 
 def current_store() -> BoardStore:

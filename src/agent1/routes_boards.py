@@ -135,6 +135,7 @@ def create_boards_blueprint() -> Blueprint:
         holder = current_app.config["LIVE_STORE_HOLDER"]
         with holder["lock"]:
             current_path = holder["path"]
+            store = holder["store"]
         return apply_security_headers(
             jsonify(
                 {
@@ -142,6 +143,8 @@ def create_boards_blueprint() -> Blueprint:
                     "name": entry["name"],
                     "source_path": entry["source_path"],
                     "current_path": current_path,
+                    # Per-board external-sync opt-in map (e.g. {"agent1": true}).
+                    "sync": store.get_sync_settings() if store is not None else {},
                 }
             )
         )
@@ -289,6 +292,75 @@ def create_boards_blueprint() -> Blueprint:
         resp = jsonify(body)
         resp.status_code = 201
         return apply_security_headers(resp)
+
+    @bp.route("/sync", methods=["GET"])
+    def get_board_sync() -> Response:
+        """Per-board external-sync opt-in map for the ACTIVE board.
+
+        ``{"active": true, "board_id": "...", "sync": {"agent1": true}}`` — or
+        ``{"active": false, ...}`` when no board is selected, so the UI can
+        render a disabled state without an error round-trip.
+        """
+        active_id = current_app.config["BOARD_REGISTRY"].get_active()
+        holder = current_app.config["LIVE_STORE_HOLDER"]
+        with holder["lock"]:
+            store = holder["store"]
+        if active_id is None:
+            return apply_security_headers(
+                jsonify({"active": False, "board_id": None, "sync": {}})
+            )
+        sync_map = store.get_sync_settings() if store is not None else {}
+        return apply_security_headers(
+            jsonify({"active": True, "board_id": active_id, "sync": sync_map})
+        )
+
+    @bp.route("/sync", methods=["POST"])
+    def set_board_sync() -> Response:
+        """Update the per-board external-sync opt-in map.
+
+        Body is either the wrapped form ``{"sync": {"agent1": true}}`` or the
+        bare map itself (``{"agent1": true}``). Every value must be a JSON
+        boolean — anything else is rejected with 400 so corrupt settings can
+        never reach the board file. The change persists to the working copy,
+        which both this app and the Agent1 bridge read from disk, so it takes
+        effect on both sides of the sync link without a restart.
+        """
+        if not has_csrf_header(request):
+            return jsonify({"error": "csrf"}), 403
+        active_id = current_app.config["BOARD_REGISTRY"].get_active()
+        holder = current_app.config["LIVE_STORE_HOLDER"]
+        with holder["lock"]:
+            store = holder["store"]
+        if active_id is None or store is None:
+            return jsonify({"error": "no board selected"}), 404
+
+        data: Dict[str, Any] = request.get_json(silent=True) or {}
+        raw: Any = data.get("sync") if isinstance(data, dict) else None
+        if raw is None and isinstance(data, dict):
+            # Bare-map form: the whole body IS the sync map (all-bool values).
+            if all(isinstance(v, bool) for v in data.values()):
+                raw = {k: v for k, v in data.items() if k != "board_id"}
+        if not isinstance(raw, dict):
+            return jsonify({"error": "'sync' must be an object of booleans"}), 400
+        bad_keys = sorted(str(k) for k, v in raw.items() if not isinstance(v, bool))
+        if bad_keys:
+            return jsonify({
+                "error": (
+                    "sync values must be JSON booleans "
+                    f"(bad keys: {', '.join(bad_keys)})"
+                )
+            }), 400
+
+        store.set_sync_settings(raw)
+        return apply_security_headers(
+            jsonify(
+                {
+                    "active": True,
+                    "board_id": active_id,
+                    "sync": store.get_sync_settings(),
+                }
+            )
+        )
 
     return bp
 

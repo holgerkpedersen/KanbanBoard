@@ -22,6 +22,19 @@ def atomic_write_json(path: str, data: Any) -> None:
     os.replace(tmp, path)
 
 
+def _clean_sync_map(value: Any) -> Dict[str, bool]:
+    """Validate a raw ``sync`` map from disk or the API.
+
+    Only string keys with strict boolean values survive; anything else is
+    discarded so corrupt settings can never crash loading (same tolerance as
+    the rest of :meth:`BoardStore._load`). Absent or malformed input yields an
+    empty map, which means "no external system may sync this board".
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): v for k, v in value.items() if isinstance(v, bool)}
+
+
 class BoardStore:
     """In-memory board store with optional JSON-file persistence.
 
@@ -29,6 +42,12 @@ class BoardStore:
     startup and writes it back (atomically) after every mutation, so frames
     and cards survive process restarts. When ``path`` is ``None`` the store
     is purely in-memory (used by the test suite).
+
+    The store also carries a top-level ``sync`` map (e.g.
+    ``{"agent1": true}``) recording which external systems this board has
+    opted in to syncing with. Like frames and cards it round-trips through
+    the board file, so the setting survives restarts and is visible to both
+    sides of a sync link (the Agent1 bridge reads it straight from disk).
 
     The store is bound to a single file. The board-switcher feature uses
     :meth:`set_path` to atomically swap the active file at runtime; the
@@ -41,6 +60,7 @@ class BoardStore:
         self._frames: Dict[str, Frame] = {}
         self._cards: Dict[str, Card] = {}
         self._frame_order: List[str] = []
+        self._sync_settings: Dict[str, bool] = {}
         self._path: Optional[str] = path
         if path:
             self._load()
@@ -64,6 +84,7 @@ class BoardStore:
             self._frames = {}
             self._cards = {}
             self._frame_order = []
+            self._sync_settings = {}
             if path:
                 self._load()
 
@@ -76,6 +97,9 @@ class BoardStore:
                 if fid in self._frames
             ],
             "cards": [c.to_dict() for c in self._cards.values()],
+            # Always written (even when empty) so the opt-in state is explicit
+            # on disk and readable by external systems without loading us.
+            "sync": dict(self._sync_settings),
         }
 
     def _save(self) -> None:
@@ -98,6 +122,7 @@ class BoardStore:
         self._frames = {}
         self._cards = {}
         self._frame_order = []
+        self._sync_settings = _clean_sync_map(data.get("sync"))
         for f in data.get("frames", []):
             frame = Frame(
                 id=f["id"],
@@ -222,3 +247,26 @@ class BoardStore:
                 if card_id in frame.card_ids:
                     frame.card_ids.remove(card_id)
             self._save()
+
+    # ---- external sync settings --------------------------------------------
+    def get_sync_settings(self) -> Dict[str, bool]:
+        """Copy of the per-system opt-in map (e.g. ``{"agent1": True}``)."""
+        with self._lock:
+            return dict(self._sync_settings)
+
+    def set_sync_settings(self, settings: Any) -> None:
+        """Replace the sync map and persist it to the board file.
+
+        Non-dict input or non-bool entries are discarded (see
+        :func:`_clean_sync_map`); the API layer does its own strict
+        validation so users get a 400 for malformed payloads instead of
+        silent dropping.
+        """
+        with self._lock:
+            self._sync_settings = _clean_sync_map(settings)
+            self._save()
+
+    def sync_allowed(self, system: str) -> bool:
+        """True when this board has opted in to syncing with ``system``."""
+        with self._lock:
+            return bool(self._sync_settings.get(system))

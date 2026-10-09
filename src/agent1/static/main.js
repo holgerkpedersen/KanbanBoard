@@ -39,6 +39,11 @@ const Api = {
     api("POST", "/api/boards/select", { catalog_id }),
   resetBoard: (catalog_id) =>
     api("POST", "/api/boards/reset", { catalog_id }),
+  // Per-board external-sync opt-in. The server persists this to the board's
+  // working copy, which Agent1 reads from disk — so toggling it takes effect
+  // on both sides of the sync link without a restart.
+  getBoardSync: () => api("GET", "/api/boards/sync"),
+  setBoardSync: (map) => api("POST", "/api/boards/sync", map),
   // Upload a board (JSON body or multipart file) into the catalog. When
   // `activate` is true the server also selects it as the active board.
   uploadBoard: (body, { activate = false } = {}) => {
@@ -556,6 +561,37 @@ const boardCatalogDirEl = $("#board-catalog-dir");
 const boardWorkingDirEl = $("#board-working-dir");
 const boardUploadFileEl = $("#board-upload-file");
 const boardUploadBtn = $("#board-upload-submit");
+const boardSyncToggleEl = $("#board-sync-toggle");
+let syncToggling = false; // guard: don't stomp an in-flight toggle with a refresh
+
+async function refreshBoardSync() {
+  if (!boardSyncToggleEl || syncToggling) return;
+  try {
+    const data = await Api.getBoardSync();
+    boardSyncToggleEl.disabled = !data.active;
+    boardSyncToggleEl.checked = Boolean(data.sync && data.sync.agent1);
+  } catch (err) {
+    // Non-fatal: leave the toggle as-is, don't block board loading.
+    console.error("Failed to load sync settings:", err);
+  }
+}
+
+if (boardSyncToggleEl) {
+  boardSyncToggleEl.addEventListener("change", async () => {
+    const wanted = boardSyncToggleEl.checked;
+    const prev = !wanted;
+    syncToggling = true;
+    try {
+      await Api.setBoardSync({ agent1: wanted });
+    } catch (err) {
+      boardSyncToggleEl.checked = prev; // revert on failure
+      console.error("Failed to save sync settings:", err);
+      showBoardError(err.message);
+    } finally {
+      syncToggling = false;
+    }
+  });
+}
 
 function setActiveBoardLabel(name) {
   if (boardNameEl) boardNameEl.textContent = name || "Board";
@@ -674,6 +710,7 @@ async function loadActiveBoard(reloadBoard = false) {
   const active = await Api.getActiveBoard();
   state.activeBoard = active && active.id ? active : null;
   setActiveBoardLabel(state.activeBoard ? state.activeBoard.name : "");
+  refreshBoardSync(); // keep the per-board Agent1 sync toggle in sync
   if (reloadBoard || state.frames.length === 0) {
     state.frames = await Api.getBoard();
     state.query = "";

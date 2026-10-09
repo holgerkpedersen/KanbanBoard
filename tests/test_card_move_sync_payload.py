@@ -58,6 +58,20 @@ def synced(tmp_path, monkeypatch):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    # These tests exercise the sync *payload shape*, not the per-board gate.
+    # Opt the live board into agent1 sync so outbound enqueues are unblocked;
+    # the gate itself is pinned in test_board_sync_gate.py.  The holder's store
+    # is allocated lazily on first request, so pre-seed a real one with a temp
+    # path — the lazy default would be an in-memory store that never opted in.
+    from src.agent1.store import BoardStore
+
+    board_path = working / "board-sync-payload-test.json"
+    holder = app.config["LIVE_STORE_HOLDER"]
+    with holder["lock"]:
+        if holder["store"] is None:
+            holder["store"] = BoardStore(path=str(board_path))
+            holder["path"] = str(board_path)
+        holder["store"].set_sync_settings({"agent1": True})
     return app.test_client(), queue
 
 
