@@ -182,12 +182,11 @@ function el(tag, cls, text) {
   return node;
 }
 
+// The matching rules live in search.js (pure, unit-tested in Node) so they
+// can be verified without a browser. `card` matches on title, text, system
+// and tags.
 function matchesQuery(card) {
-  const q = state.query.trim().toLowerCase();
-  if (!q) return true;
-  if (card.title.toLowerCase().includes(q)) return true;
-  if ((card.text || "").toLowerCase().includes(q)) return true;
-  return (card.tags || []).some((t) => t.toLowerCase().includes(q));
+  return CardSearch.matchesQuery(card, state.query);
 }
 
 // ---- Rendering ------------------------------------------------------------

@@ -10,7 +10,8 @@ disk** as JSON, so it survives restarts with no database.
   drag-and-drop to reorder horizontally.
 - **Cards (tasks):** create, edit (title / description / tags / system field),
   delete, and drag-and-drop vertically within a frame or horizontally across frames.
-- **Search:** a global search bar filters cards in real time by title, description, or tags.
+- **Search:** a global search bar filters cards in real time by title, description,
+  tags, or system (the card's System property), and the match is case-insensitive.
 - **Drag sounds:** subtle, fully synthesized (Web Audio) pick-up / move / frame-slide
   cues — no audio asset files. Sounds are **off by default**; click the 🔊/🔇 button in
   the top bar (or the first-run prompt) to enable, and your choice is remembered in

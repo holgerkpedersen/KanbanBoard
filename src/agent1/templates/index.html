@@ -29,7 +29,7 @@
       id="search"
       class="search"
       type="search"
-      placeholder="Search cards by title, text or tag…"
+      placeholder="Search cards by title, text, tag or system…"
       autocomplete="off"
       aria-label="Search cards"
     />
@@ -145,6 +145,7 @@
   </div>
 
   <script src="{{ url_for('static', filename='dnd.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='search.js') }}" defer></script>
   <script src="{{ url_for('static', filename='main.js') }}" defer></script>
 </body>
 </html>
