@@ -84,8 +84,14 @@ def test_board_payload_exposes_system_for_client_search():
 
 
 def test_main_js_delegates_search_to_helper():
-    """main.js must not keep a second, system-blind copy of the rules."""
+    """main.js must not keep a second, system-blind copy of the rules.
+
+    The delegation point moved from ``matchesQuery`` to the combined
+    ``filterCard`` entry (query + tag selection + date ranges), which calls
+    matchesQuery internally. The invariant is unchanged: main.js only calls
+    into CardSearch; it never re-implements matching itself.
+    """
     main_js = (STATIC_DIR / "main.js").read_text(encoding="utf-8")
-    assert "CardSearch.matchesQuery(card, state.query)" in main_js
+    assert "CardSearch.filterCard(card, state.query, state.filters)" in main_js
     # The old inline filter returned early on title; that blind copy is gone.
     assert "function matchesQuery(card) {\n  const q" not in main_js

@@ -76,6 +76,16 @@ const state = {
   frames: [], // [{ id, title, cards: [{id,title,text,tags,frame_id}] }]
   query: "",
   activeBoard: null, // { id, name, path } — set on boot and after every switch
+  // Card visibility filters. Date values are "YYYY-MM-DD" strings from the
+  // calendar inputs (empty = open-ended); tags is the selected-tag list
+  // (empty = tag filter inactive). Matching rules live in search.js.
+  filters: {
+    createdFrom: "",
+    createdTo: "",
+    updatedFrom: "",
+    updatedTo: "",
+    tags: [],
+  },
 };
 
 // ---- Sound effects (Web Audio synth, no asset files) -----------------------
@@ -182,11 +192,18 @@ function el(tag, cls, text) {
   return node;
 }
 
+// Format an ISO 8601 timestamp for display as a browser-local calendar day.
+// Missing/unparseable dates render as "" so callers can hide them.
+function fmtDate(iso) {
+  return CardSearch.localDateOf(iso) || "";
+}
+
 // The matching rules live in search.js (pure, unit-tested in Node) so they
-// can be verified without a browser. `card` matches on title, text, system
-// and tags.
-function matchesQuery(card) {
-  return CardSearch.matchesQuery(card, state.query);
+// can be verified without a browser. Visibility = free-text query AND tag
+// selection AND active created/updated date ranges; each inactive group is
+// a no-op.
+function cardVisible(card) {
+  return CardSearch.filterCard(card, state.query, state.filters);
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -194,6 +211,7 @@ function render() {
   board.replaceChildren();
   state.frames.forEach((frame) => board.appendChild(renderFrame(frame)));
   refreshSystemList();
+  renderTagFilter();
 }
 
 // Keep the System <datalist> in sync with the systems used on the board so
@@ -245,7 +263,7 @@ function renderFrame(frame) {
   });
 
   const cardsBox = $(".cards", node);
-  const visible = frame.cards.filter(matchesQuery);
+  const visible = frame.cards.filter(cardVisible);
   if (frame.cards.length && !visible.length) {
     cardsBox.appendChild(el("div", "empty-hint", "No matching cards"));
   }
@@ -309,6 +327,18 @@ function openCardModal(frameId, card) {
   $("#card-text").value = card ? card.text || "" : "";
   $("#card-tags").value = card ? (card.tags || []).join(", ") : "";
   $("#card-system").value = card ? card.system || "" : "";
+  // Existing cards show their created/updated timestamps in local time.
+  const dates = $("#card-dates");
+  if (dates) {
+    const created = fmtDate(card && card.created_at);
+    const updated = fmtDate(card && card.updated_at);
+    if (created || updated) {
+      dates.textContent = "Created: " + (created || "unknown") + "   Updated: " + (updated || "unknown");
+      dates.hidden = false;
+    } else {
+      dates.hidden = true;
+    }
+  }
   $("#card-modal-title").textContent = card ? "Edit card" : "New card";
   cardModal.classList.remove("hidden");
   $("#card-title").focus();
@@ -470,6 +500,76 @@ searchInput.addEventListener("input", () => {
   state.query = searchInput.value;
   render();
 });
+
+// ---- Filters: calendar date ranges + tag chips ------------------------------
+// The four <input type="date"> controls write inclusive "YYYY-MM-DD" bounds
+// into state.filters; the tag chip row renders one toggle per tag used on
+// the board. Like the free-text query, filtering is client-side only: all
+// cards stay loaded, hidden ones simply do not render.
+const DATE_FILTER_INPUTS = [
+  ["filter-created-from", "createdFrom"],
+  ["filter-created-to", "createdTo"],
+  ["filter-updated-from", "updatedFrom"],
+  ["filter-updated-to", "updatedTo"],
+];
+
+DATE_FILTER_INPUTS.forEach(([id, key]) => {
+  const input = document.getElementById(id);
+  if (!input) return;
+  input.addEventListener("change", () => {
+    state.filters[key] = input.value || "";
+    render();
+  });
+});
+
+const clearFiltersBtn = document.getElementById("clear-filters");
+if (clearFiltersBtn) {
+  clearFiltersBtn.addEventListener("click", () => resetFilters());
+}
+
+// Clear every filter: free-text query, date ranges and tag selection.
+function resetFilters() {
+  state.query = "";
+  if (searchInput) searchInput.value = "";
+  DATE_FILTER_INPUTS.forEach(([id, key]) => {
+    state.filters[key] = "";
+    const input = document.getElementById(id);
+    if (input) input.value = "";
+  });
+  state.filters.tags = [];
+  render();
+}
+
+// Render one chip per tag used anywhere on the board. Chips reflect the
+// current selection via aria-pressed; clicking a chip toggles its tag.
+function renderTagFilter() {
+  const box = document.getElementById("tag-filter");
+  if (!box) return;
+  const tags = new Set();
+  state.frames.forEach((f) =>
+    (f.cards || []).forEach((c) =>
+      (c.tags || []).forEach((t) => t && t.trim() && tags.add(t))
+    )
+  );
+  // Drop selected tags that no longer exist on the board.
+  state.filters.tags = state.filters.tags.filter((t) => tags.has(t));
+  const sorted = [...tags].sort((a, b) => a.localeCompare(b));
+  box.replaceChildren();
+  if (!sorted.length) return;
+  box.appendChild(el("span", "filter-label", "Tags:"));
+  sorted.forEach((tag) => {
+    const chip = el("button", "tag-chip", tag);
+    chip.type = "button";
+    chip.setAttribute("aria-pressed", String(state.filters.tags.includes(tag)));
+    chip.addEventListener("click", () => {
+      const i = state.filters.tags.indexOf(tag);
+      if (i >= 0) state.filters.tags.splice(i, 1);
+      else state.filters.tags.push(tag);
+      render();
+    });
+    box.appendChild(chip);
+  });
+}
 
 // ---- Boot -----------------------------------------------------------------
 async function reload() {
@@ -712,10 +812,7 @@ async function loadActiveBoard(reloadBoard = false) {
   refreshBoardSync(); // keep the per-board Agent1 sync toggle in sync
   if (reloadBoard || state.frames.length === 0) {
     state.frames = await Api.getBoard();
-    state.query = "";
-    const search = $("#search");
-    if (search) search.value = "";
-    render();
+    resetFilters(); // a board switch always starts with no filters applied
   }
 }
 

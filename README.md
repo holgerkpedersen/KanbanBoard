@@ -12,6 +12,15 @@ disk** as JSON, so it survives restarts with no database.
   delete, and drag-and-drop vertically within a frame or horizontally across frames.
 - **Search:** a global search bar filters cards in real time by title, description,
   tags, or system (the card's System property), and the match is case-insensitive.
+- **Card timestamps:** every card carries a creation time and a last-update time;
+  editing a card refreshes its update timestamp. The edit dialog shows both dates.
+- **Filter bar:** calendar date-range pickers for each of the four boundaries
+  (created / updated, from / to) plus one toggle chip per tag used on the board.
+  All filters combine with AND. A range group matches when its inclusive day span
+  (in browser-local time) contains the card's timestamp; open ends are ignored; an
+  empty tag selection is inactive. A Clear button resets everything, and switching
+  boards always starts unfiltered. Filtering is client-side only: hidden cards stay
+  on the board untouched — no data changes.
 - **Drag sounds:** subtle, fully synthesized (Web Audio) pick-up / move / frame-slide
   cues — no audio asset files. Sounds are **off by default**; click the 🔊/🔇 button in
   the top bar (or the first-run prompt) to enable, and your choice is remembered in

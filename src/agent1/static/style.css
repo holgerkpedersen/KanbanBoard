@@ -67,6 +67,8 @@
 :root[data-theme="contrast"] .frame-title,
 :root[data-theme="contrast"] .modal-card input,
 :root[data-theme="contrast"] .modal-card textarea,
+:root[data-theme="contrast"] .date-input,
+:root[data-theme="contrast"] .tag-chip,
 :root[data-theme="contrast-dark"] .btn,
 :root[data-theme="contrast-dark"] .frame,
 :root[data-theme="contrast-dark"] .card,
@@ -74,7 +76,9 @@
 :root[data-theme="contrast-dark"] .search,
 :root[data-theme="contrast-dark"] .frame-title,
 :root[data-theme="contrast-dark"] .modal-card input,
-:root[data-theme="contrast-dark"] .modal-card textarea {
+:root[data-theme="contrast-dark"] .modal-card textarea,
+:root[data-theme="contrast-dark"] .date-input,
+:root[data-theme="contrast-dark"] .tag-chip {
   border-width: 2px;
 }
 
@@ -486,4 +490,75 @@ html, body {
 .board-upload-input:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* ---- Card filters: calendar ranges + tag chips ------------------------- */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.filter-sep {
+  color: var(--muted);
+}
+.date-input {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.date-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tag-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tag-chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.filter-clear {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+/* Created/updated line in the card modal. */
+.modal-dates {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 8px;
 }

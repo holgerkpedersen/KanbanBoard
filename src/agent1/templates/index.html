@@ -46,6 +46,24 @@
     <button class="icon-btn sfx-toggle" type="button" aria-label="Mute drag sounds">🔇</button>
   </header>
 
+  <!-- Card filters: calendar date ranges + tag chips. -->
+  <section id="filter-bar" class="filter-bar" aria-label="Card filters">
+    <div class="filter-group" role="group" aria-labelledby="filter-created-label">
+      <span id="filter-created-label" class="filter-label">Created</span>
+      <input id="filter-created-from" type="date" class="date-input" aria-label="Created from date" />
+      <span class="filter-sep" aria-hidden="true">&ndash;</span>
+      <input id="filter-created-to" type="date" class="date-input" aria-label="Created to date" />
+    </div>
+    <div class="filter-group" role="group" aria-labelledby="filter-updated-label">
+      <span id="filter-updated-label" class="filter-label">Updated</span>
+      <input id="filter-updated-from" type="date" class="date-input" aria-label="Updated from date" />
+      <span class="filter-sep" aria-hidden="true">&ndash;</span>
+      <input id="filter-updated-to" type="date" class="date-input" aria-label="Updated to date" />
+    </div>
+    <div id="tag-filter" class="tag-filter" role="group" aria-label="Tag filters"></div>
+    <button id="clear-filters" class="btn btn-ghost filter-clear" type="button">Clear</button>
+  </section>
+
   <div id="sfx-prompt" class="sfx-prompt" hidden>
     <span>🎵 Drag sounds are off. Click to enable.</span>
   </div>
@@ -74,6 +92,7 @@
         <input id="card-system" name="system" type="text" maxlength="60" list="system-list" placeholder="e.g. Billing, Auth, API" />
         <datalist id="system-list"></datalist>
       </label>
+      <p id="card-dates" class="modal-dates" hidden></p>
       <div class="modal-actions">
         <button type="button" class="btn" data-close>Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>

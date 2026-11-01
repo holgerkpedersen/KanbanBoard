@@ -184,6 +184,8 @@ class BoardStore:
                 frame_id=c["frame_id"],
                 tags=list(c.get("tags", [])),
                 system=c.get("system", ""),
+                created_at=str(c.get("created_at", "")),
+                updated_at=str(c.get("updated_at", "")),
             )
             self._cards[card.id] = card
 
@@ -216,7 +218,9 @@ class BoardStore:
 
     def get_all_frames(self) -> List[Frame]:
         with self._lock:
-            return [self._frames[fid] for fid in self._frame_order if fid in self._frames]
+            return [
+                self._frames[fid] for fid in self._frame_order if fid in self._frames
+            ]
 
     def update_frame(self, frame: Frame) -> None:
         with self._lock:

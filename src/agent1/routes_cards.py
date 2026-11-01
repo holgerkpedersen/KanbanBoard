@@ -12,7 +12,7 @@ import os
 import uuid
 
 from .store import BoardStore
-from .models import Card
+from .models import Card, now_iso
 from .security import (
     validate_card_title,
     validate_card_text,
@@ -83,6 +83,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             return jsonify({"error": str(exc)}), 400
         raw_tags = data.get("tags", [])
         tags = [str(t) for t in raw_tags] if isinstance(raw_tags, list) else []
+        created = now_iso()
         card = Card(
             id=uuid.uuid4().hex,
             title=title,
@@ -90,6 +91,8 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             frame_id=frame_id,
             tags=tags,
             system=system,
+            created_at=created,
+            updated_at=created,
         )
         store.add_card(card, frame_id)
 
@@ -153,6 +156,8 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             if store.get_frame(fid) is None:
                 return jsonify({"error": "frame not found"}), 404
             card.frame_id = fid
+        # Any accepted update refreshes the card's updated_at timestamp.
+        card.updated_at = now_iso()
         store.update_card(card)
 
         # Enqueue card update to Agent1 if sync is enabled
@@ -205,6 +210,9 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             return jsonify({"error": "invalid frame"}), 400
         index = data.get("index")
         index = index if isinstance(index, int) else None
+        # A move counts as a change to the card: refresh updated_at. The
+        # store's move_card looks up this same card object and persists it.
+        card.updated_at = now_iso()
         if not store.move_card(card_id, fid, index):
             return jsonify({"error": "move failed"}), 400
 
