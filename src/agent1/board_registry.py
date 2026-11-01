@@ -22,15 +22,16 @@ import os
 import threading
 from typing import Optional
 
+from .store import atomic_write_json
+
 
 def _atomic_write_json(path: str, data: object) -> None:
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    """Write ``data`` as JSON to ``path`` atomically (tmp + os.replace).
+
+    Delegates to :func:`src.agent1.store.atomic_write_json` so the live board
+    store and the active-board registry share one crash-safe, retrying write.
+    """
+    atomic_write_json(path, data)
 
 
 class BoardRegistry:

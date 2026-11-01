@@ -1,9 +1,33 @@
+import errno
 import json
 import os
 import threading
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from .models import Card, Frame
+
+#: Transient OS error codes worth retrying inside a guarded atomic write.
+#: ``ERROR_SHARING_VIOLATION`` (32) is the recurring Windows failure where
+#: ``os.replace`` onto a destination that is momentarily held by another
+#: handle raises ``PermissionError: [WinError 32]``; the neighbouring codes
+#: cover the access / lock variants.
+_TRANSIENT_ERRNOS = frozenset({errno.EACCES, errno.EAGAIN, 32, 33})
+
+#: Retry policy for transient failures inside :func:`atomic_write_json`.
+_ATOMIC_WRITE_ATTEMPTS = 5
+_ATOMIC_WRITE_BACKOFF_SECONDS = 0.05
+
+
+def _is_transient_os_error(exc: BaseException) -> bool:
+    """True for transient Windows sharing / lock violations (retryable)."""
+    if not isinstance(exc, OSError):
+        return False
+    codes = {getattr(exc, "errno", None), getattr(exc, "winerror", None)}
+    return any(
+        code is not None and int(code) in _TRANSIENT_ERRNOS for code in codes
+    )
 
 
 def atomic_write_json(path: str, data: Any) -> None:
@@ -12,14 +36,35 @@ def atomic_write_json(path: str, data: Any) -> None:
     Shared by :class:`BoardStore` and the board registry so both use the
     same crash-safe write semantics. The parent directory is created if
     it doesn't exist.
+
+    The temp sidecar gets a unique name per write so concurrent writers can
+    never clobber each other's in-flight file, and transient Windows sharing
+    violations (``PermissionError: [WinError 32]``) are retried with backoff
+    instead of failing the mutation outright - which is what used to
+    dead-letter every mutating Kanban sync message.
     """
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp = os.path.join(directory, f"{os.path.basename(path)}.{uuid.uuid4().hex}.tmp")
+    last_exc: Optional[BaseException] = None
+    for attempt in range(_ATOMIC_WRITE_ATTEMPTS):
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if not _is_transient_os_error(exc) or attempt == _ATOMIC_WRITE_ATTEMPTS - 1:
+                break
+            time.sleep(_ATOMIC_WRITE_BACKOFF_SECONDS * (2**attempt))
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    if last_exc is not None:
+        raise last_exc
+    raise OSError("atomic write failed")
 
 
 def _clean_sync_map(value: Any) -> Dict[str, bool]:

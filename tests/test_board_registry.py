@@ -6,13 +6,16 @@ known boards; Agent1 now owns that list (the catalog folder) and the
 app is read-only against it.
 """
 
+import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+import src.agent1.board_registry as reg_mod
 from src.agent1.board_registry import BoardRegistry
 
 
@@ -86,3 +89,32 @@ def test_atomic_write_does_not_leave_tmp_on_success(tmp_path):
     reg.set_active("b")
     leftover = list(tmp_path.glob("active.json.tmp"))
     assert leftover == []
+
+
+def test_registry_atomic_write_retries_transient_windows_sharing_violation(
+    tmp_path, monkeypatch
+):
+    """Regression: the active-board pointer write must retry a transient
+    ``PermissionError: [WinError 32]`` instead of failing the write.
+    """
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(
+                32,
+                "The process cannot access the file because of other opened handles",
+                str(dst),
+            )
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(reg_mod.os, "replace", flaky_replace)
+    monkeypatch.setattr(time, "sleep", lambda *_: None)
+
+    reg = BoardRegistry(path=str(tmp_path / "active.json"))
+    reg.set_active("a")
+
+    assert calls["n"] == 2, "the transient violation must be retried exactly once"
+    assert reg.get_active() == "a"
