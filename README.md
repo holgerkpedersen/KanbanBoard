@@ -10,6 +10,9 @@ disk** as JSON, so it survives restarts with no database.
   drag-and-drop to reorder horizontally.
 - **Cards (tasks):** create, edit (title / description / tags / system field),
   delete, and drag-and-drop vertically within a frame or horizontally across frames.
+- **Card ID:** every card shows its ID on the board and in a read-only field in the
+  edit dialog, each with a Copy button (async Clipboard API, with a legacy fallback),
+  so a card can be referenced unambiguously in tickets, commits and chat.
 - **Search:** a global search bar filters cards in real time by title, description,
   tags, or system (the card's System property), and the match is case-insensitive.
 - **Card timestamps:** every card carries a creation time and a last-update time;

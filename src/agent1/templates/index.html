@@ -73,7 +73,7 @@
   <!-- Card editor dialog -->
   <div id="card-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="card-modal-title">
     <div class="modal-backdrop" data-close></div>
-    <form id="card-form" class="modal-card">
+    <form id="card-form" class="modal-card card-modal-card">
       <h2 id="card-modal-title">Edit card</h2>
       <label>
         Title
@@ -81,7 +81,7 @@
       </label>
       <label>
         Description
-        <textarea id="card-text" name="text" maxlength="2000" rows="4"></textarea>
+        <textarea id="card-text" name="text" maxlength="2000" rows="8"></textarea>
       </label>
       <label>
         Tags (comma separated)
@@ -92,6 +92,13 @@
         <input id="card-system" name="system" type="text" maxlength="60" list="system-list" placeholder="e.g. Billing, Auth, API" />
         <datalist id="system-list"></datalist>
       </label>
+      <div id="card-id-field" class="modal-id-field" hidden>
+        <span class="modal-id-label">Card ID</span>
+        <div class="modal-id-row">
+          <input id="card-id" type="text" class="modal-id-input" readonly />
+          <button id="card-id-copy" class="btn modal-id-copy" type="button">Copy</button>
+        </div>
+      </div>
       <p id="card-dates" class="modal-dates" hidden></p>
       <div class="modal-actions">
         <button type="button" class="btn" data-close>Cancel</button>
@@ -119,6 +126,10 @@
       <p class="card-text"></p>
       <div class="card-system" hidden></div>
       <div class="card-tags"></div>
+      <div class="card-id-row">
+        <code class="card-id" title="Card ID"></code>
+        <button class="icon-btn card-copy" title="Copy card ID" type="button">⧉</button>
+      </div>
       <div class="card-tools">
         <button class="icon-btn card-edit" title="Edit" type="button">✎</button>
         <button class="icon-btn card-del" title="Delete" type="button">×</button>
@@ -165,6 +176,7 @@
 
   <script src="{{ url_for('static', filename='dnd.js') }}" defer></script>
   <script src="{{ url_for('static', filename='search.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='cardid.js') }}" defer></script>
   <script src="{{ url_for('static', filename='main.js') }}" defer></script>
 </body>
 </html>

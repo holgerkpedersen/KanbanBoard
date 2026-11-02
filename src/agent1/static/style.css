@@ -368,6 +368,44 @@ html, body {
   border-radius: 6px;
   background: rgba(91, 140, 255, 0.08);
 }
+/* Card ID: the stable reference users quote. Shown in full and copyable,
+   with the copy button revealed on hover/focus to keep the card calm. */
+.card-id-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+.card-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Selectable, so the ID can be selected and copied by hand too. */
+  user-select: all;
+  cursor: text;
+}
+.card-copy {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.card:hover .card-copy,
+.card-copy:focus-visible,
+.card-copy.copied {
+  opacity: 1;
+}
+/* Confirm a successful copy without moving the layout. */
+.card-copy.copied { color: var(--accent); }
+
 .card-tools { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
 .card:hover .card-tools { display: flex; }
 
@@ -405,6 +443,37 @@ html, body {
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .empty-hint { color: var(--muted); font-size: 12px; padding: 6px; text-align: center; }
+
+/* Read-only card ID inside the card editor, with its own copy button. */
+.modal-id-field { display: flex; flex-direction: column; gap: 6px; }
+/* `display: flex` above would otherwise defeat the `hidden` attribute and
+   show an empty ID row (with a dead Copy button) on "New card". */
+.modal-id-field[hidden] { display: none; }
+.modal-id-label { font-size: 13px; color: var(--muted); }
+.modal-id-row { display: flex; gap: 8px; align-items: center; }
+.modal-id-input {
+  flex: 1;
+  min-width: 0; /* lets the input shrink instead of overflowing the row */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+/* Fixed width so the "Copied" / "Copy failed" feedback does not shift the row. */
+.modal-id-copy { flex-shrink: 0; min-width: 84px; }
+
+/* ---- Card editor ------------------------------------------------------ */
+/* The editor holds six fields plus the ID row, so it gets more room than the
+   default 440px panel, and the body scrolls instead of pushing Save/Cancel
+   off-screen on short viewports. */
+.card-modal-card {
+  width: min(640px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+.card-modal-card textarea {
+  resize: vertical;
+  min-height: 130px;
+}
 
 /* ---- Board picker ----------------------------------------------------- */
 .board-modal-card {

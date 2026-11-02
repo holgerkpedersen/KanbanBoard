@@ -294,6 +294,26 @@ function renderCard(card) {
   const tagsBox = $(".card-tags", node);
   (card.tags || []).forEach((t) => tagsBox.appendChild(el("span", "tag", t)));
 
+  // The card ID is the reference users quote when they talk about a card, so
+  // it is shown in full and copyable. Both the ID itself and the copy button
+  // copy it, and the button confirms with a short "Copied" label.
+  const idBox = $(".card-id", node);
+  if (idBox) idBox.textContent = card.id;
+  const copyBtn = $(".card-copy", node);
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const ok = await CardId.copyText(card.id, navigator, document);
+      const previous = copyBtn.title;
+      copyBtn.title = ok ? "Copied" : "Copy failed";
+      copyBtn.classList.toggle("copied", ok);
+      setTimeout(() => {
+        copyBtn.title = previous;
+        copyBtn.classList.remove("copied");
+      }, 1200);
+    });
+  }
+
   $(".card-edit", node).addEventListener("click", () =>
     openCardModal(card.frame_id, card)
   );
@@ -327,6 +347,15 @@ function openCardModal(frameId, card) {
   $("#card-text").value = card ? card.text || "" : "";
   $("#card-tags").value = card ? (card.tags || []).join(", ") : "";
   $("#card-system").value = card ? card.system || "" : "";
+  // Existing cards show their read-only ID, so it can be copied without
+  // leaving the editor. New cards have no ID yet, so the field stays hidden.
+  const idField = $("#card-id-field");
+  const idInput = $("#card-id");
+  if (idField && idInput) {
+    const hasId = Boolean(card && card.id);
+    idInput.value = hasId ? card.id : "";
+    idField.hidden = !hasId;
+  }
   // Existing cards show their created/updated timestamps in local time.
   const dates = $("#card-dates");
   if (dates) {
@@ -352,6 +381,20 @@ function closeCardModal() {
 cardModal.addEventListener("click", (e) => {
   if (e.target.hasAttribute("data-close")) closeCardModal();
 });
+
+// Copy button inside the editor: type="button", so it never submits the form.
+const cardIdCopyBtn = $("#card-id-copy");
+if (cardIdCopyBtn) {
+  cardIdCopyBtn.addEventListener("click", async () => {
+    const value = $("#card-id").value;
+    const ok = await CardId.copyText(value, navigator, document);
+    const previous = cardIdCopyBtn.textContent;
+    cardIdCopyBtn.textContent = ok ? "Copied" : "Copy failed";
+    setTimeout(() => {
+      cardIdCopyBtn.textContent = previous;
+    }, 1200);
+  });
+}
 
 cardForm.addEventListener("submit", async (e) => {
   e.preventDefault();
