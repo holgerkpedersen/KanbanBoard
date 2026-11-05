@@ -9,6 +9,10 @@
   --accent: #5b8cff;
   --accent-2: #3a6bff;
   --danger: #ff5b6e;
+  /* Card tag chip: translucent accent wash + light blue text. */
+  --tag-bg: rgba(91, 140, 255, 0.15);
+  --tag-text: #b9ccff;
+  --tag-border: rgba(185, 204, 255, 0.5);
   --radius: 10px;
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
@@ -24,6 +28,11 @@
   --accent: #2f6bff;
   --accent-2: #1f54e0;
   --danger: #d6324a;
+  /* Card tag chip: a slightly stronger accent wash still needs dark text on a
+     pale surface (the inherited #b9ccff gave only 1.37:1 here). */
+  --tag-bg: rgba(47, 107, 255, 0.12);
+  --tag-text: #1b3fa8;
+  --tag-border: rgba(27, 63, 168, 0.65);
   --radius: 10px;
   --shadow: 0 6px 20px rgba(20, 30, 60, 0.12);
 }
@@ -39,6 +48,10 @@
   --accent: #0033cc;
   --accent-2: #002299;
   --danger: #c20000;
+  /* Card tag chip: maximum contrast — black on a pale accent wash. */
+  --tag-bg: rgba(0, 51, 204, 0.15);
+  --tag-text: #000000;
+  --tag-border: #000000;
   --radius: 10px;
   --shadow: 0 0 0 2px #000000;
 }
@@ -54,6 +67,10 @@
   --accent: #66b2ff;
   --accent-2: #99ccff;
   --danger: #ff6b6b;
+  /* Card tag chip: maximum contrast — white on a dark accent wash. */
+  --tag-bg: rgba(102, 178, 255, 0.15);
+  --tag-text: #ffffff;
+  --tag-border: #ffffff;
   --radius: 10px;
   --shadow: 0 0 0 2px #ffffff;
 }
@@ -348,12 +365,47 @@ html, body {
 .card-text { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-wrap; }
 .card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
-  background: rgba(91, 140, 255, 0.15);
-  color: #b9ccff;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+  /* The border keeps the chip distinguishable from the card when the wash is
+     very pale (light theme) and carries the colour in high-contrast themes. */
+  border: 1px solid var(--tag-border);
   border-radius: 999px;
   padding: 2px 8px;
   font-size: 11px;
+  /* Chips sit on their own line inside long cards; keep them from being
+     squeezed so the text never wraps mid-word. */
+  white-space: nowrap;
 }
+
+/* ---- Integrated cards -------------------------------------------------- */
+/* A card linked to an Agent1 issue: thicker accent left border plus a faint
+   accent wash, so it reads as "linked" at normal zoom in every theme (all
+   four define --accent/--border). */
+.card-integrated {
+  border-left: 4px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+/* Small pill shown inside the card header when a card is integrated. The JS
+   toggles it with the `hidden` attribute, so keep it inline-level and guard
+   the hidden state explicitly. */
+.card-integrated-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--tag-bg);
+}
+.card-integrated-badge[hidden] { display: none; }
+
 /* System badge: distinguishes cards belonging to different systems. */
 .card-system {
   display: inline-block;
@@ -467,12 +519,30 @@ html, body {
    off-screen on short viewports. */
 .card-modal-card {
   width: min(640px, 94vw);
+  /* The JS widens the panel to follow the resized description field, so the
+     panel must be free to follow its own width: flex containers default to a
+     content-based automatic minimum width, which would pin it to 640px. */
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 94vw;
   max-height: 88vh;
   overflow: auto;
 }
 .card-modal-card textarea {
-  resize: vertical;
+  /* Both axes: widening the description is what should widen the panel, so the
+     editor follows it (see modalwidth.js / syncModalWidth in main.js). */
+  resize: both;
   min-height: 130px;
+  /* No `max-width: 100%` here on purpose: it would cap the drag at the panel's
+     current content width, so the field could never grow and the panel would
+     never follow it. During a drag the field may poke out of the panel for one
+     frame; syncModalWidth then widens the panel to match. */
+}
+/* Stretch every field to the panel width so they stay aligned with a widened
+   description instead of hugging their own text. */
+.card-modal-card label > input,
+.card-modal-card label > textarea {
+  width: 100%;
 }
 
 /* ---- Board picker ----------------------------------------------------- */

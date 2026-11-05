@@ -30,6 +30,9 @@ const Api = {
   deleteCard: (id) => api("DELETE", `/api/cards/${id}`),
   moveCard: (id, frameId, index) =>
     api("POST", `/api/cards/${id}/move`, { frame_id: frameId, index }),
+  // Card ids linked to an Agent1 issue (read-only view of the shared
+  // .card_id_map.json). Used for the integrated-card colouring + filter.
+  getLinkedCards: () => api("GET", "/api/cards/linked"),
 
   // Board management (catalog-based: Agent1 seeds data/boards/,
   // the app copies to a working copy in data/ when the user opens it).
@@ -85,8 +88,25 @@ const state = {
     updatedFrom: "",
     updatedTo: "",
     tags: [],
+    // True = show only cards integrated with Agent1 (in the id map).
+    integrated: false,
   },
+  // Card ids linked to an Agent1 issue, loaded from /api/cards/linked.
+  // Empty set when the endpoint fails — colouring/filtering degrade to
+  // "nothing is integrated", never an error.
+  linkedCardIds: new Set(),
 };
+
+// Fetch the Agent1-linked card ids into state.linkedCardIds. Non-fatal:
+// any failure leaves the previous/empty set in place.
+async function refreshLinkedCards() {
+  try {
+    const data = await Api.getLinkedCards();
+    state.linkedCardIds = new Set(Array.isArray(data.card_ids) ? data.card_ids : []);
+  } catch (err) {
+    console.error("Failed to load linked card ids:", err);
+  }
+}
 
 // ---- Sound effects (Web Audio synth, no asset files) -----------------------
 // Lazily creates a single AudioContext on first user gesture (autoplay
@@ -200,10 +220,10 @@ function fmtDate(iso) {
 
 // The matching rules live in search.js (pure, unit-tested in Node) so they
 // can be verified without a browser. Visibility = free-text query AND tag
-// selection AND active created/updated date ranges; each inactive group is
-// a no-op.
+// selection AND active created/updated date ranges AND the integration
+// toggle; each inactive group is a no-op.
 function cardVisible(card) {
-  return CardSearch.filterCard(card, state.query, state.filters);
+  return CardSearch.filterCard(card, state.query, state.filters, state.linkedCardIds);
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -212,6 +232,7 @@ function render() {
   state.frames.forEach((frame) => board.appendChild(renderFrame(frame)));
   refreshSystemList();
   renderTagFilter();
+  renderIntegratedFilter();
 }
 
 // Keep the System <datalist> in sync with the systems used on the board so
@@ -283,6 +304,17 @@ function renderCard(card) {
   if (card.text) text.textContent = card.text;
   else text.remove();
 
+  // Integrated cards (linked to an Agent1 issue in the shared id map) get
+  // a distinct colour and a badge; plain cards keep the default look.
+  if (state.linkedCardIds.has(card.id)) {
+    node.classList.add("card-integrated");
+    const badge = $(".card-integrated-badge", node);
+    if (badge) badge.hidden = false;
+  } else {
+    const badge = $(".card-integrated-badge", node);
+    if (badge) badge.remove();
+  }
+
   const systemBox = $(".card-system", node);
   if (card.system) {
     systemBox.textContent = card.system;
@@ -341,6 +373,66 @@ function removeCardFromState(cardId) {
 // ---- Card modal -----------------------------------------------------------
 let editing = null; // { frameId, card | null }
 
+// ---- Card editor width follows the resized description ---------------------
+// The description textarea has `resize: both`. Widening it must widen the whole
+// panel, so the other fields stay inside the editor and stay aligned. The maths
+// lives in modalwidth.js (pure, unit-tested in Node); this only does the DOM
+// reads/writes and guards against the observer feeding itself.
+let syncingCardWidth = false;
+
+function cardModalPadding() {
+  const styles = getComputedStyle(cardForm);
+  const left = parseFloat(styles.paddingLeft) || 0;
+  const right = parseFloat(styles.paddingRight) || 0;
+  return left + right;
+}
+
+// Measure the description field and resize the panel to match it.
+function syncModalWidth() {
+  const field = $("#card-text");
+  if (!field || syncingCardWidth) return;
+  const plan = ModalWidth.planSizes({
+    textareaWidth: field.getBoundingClientRect().width,
+    cardPadding: cardModalPadding(),
+    viewportWidth: window.innerWidth,
+  });
+  if (!plan) return;
+
+  syncingCardWidth = true;
+  try {
+    // Only touch a width that actually needs changing. Writing to the panel
+    // resizes the field, which re-triggers the observer, so a no-op write would
+    // keep the loop alive.
+    const cardWidth = Math.round(cardForm.getBoundingClientRect().width);
+    if (cardWidth !== plan.cardWidth) {
+      cardForm.style.width = plan.cardWidth + "px";
+    }
+    const fieldWidth = Math.round(field.getBoundingClientRect().width);
+    if (fieldWidth !== plan.textareaWidth) {
+      field.style.width = plan.textareaWidth + "px";
+    }
+  } finally {
+    syncingCardWidth = false;
+  }
+}
+
+// Start each open from the stylesheet width, so a width dragged out in a
+// previous session does not leak into the next card.
+function resetCardModalWidth() {
+  cardForm.style.width = "";
+  const field = $("#card-text");
+  if (field) field.style.width = "";
+}
+
+// ResizeObserver is the reliable signal: it reports the user's textarea drag,
+// and also covers window resizes that squeeze the field.
+if (typeof ResizeObserver === "function") {
+  const widthObserver = new ResizeObserver(syncModalWidth);
+  widthObserver.observe(cardForm);
+  const textField = $("#card-text");
+  if (textField) widthObserver.observe(textField);
+}
+
 function openCardModal(frameId, card) {
   editing = { frameId, card };
   $("#card-title").value = card ? card.title : "";
@@ -369,6 +461,7 @@ function openCardModal(frameId, card) {
     }
   }
   $("#card-modal-title").textContent = card ? "Edit card" : "New card";
+  resetCardModalWidth();
   cardModal.classList.remove("hidden");
   $("#card-title").focus();
 }
@@ -570,7 +663,25 @@ if (clearFiltersBtn) {
   clearFiltersBtn.addEventListener("click", () => resetFilters());
 }
 
-// Clear every filter: free-text query, date ranges and tag selection.
+// "Integrated" toggle: show only cards linked to an Agent1 issue.
+const integratedFilterBtn = document.getElementById("filter-integrated");
+if (integratedFilterBtn) {
+  integratedFilterBtn.addEventListener("click", () => {
+    state.filters.integrated = !state.filters.integrated;
+    render();
+  });
+}
+
+// Keep the toggle's pressed state and label in sync with the filter.
+function renderIntegratedFilter() {
+  if (!integratedFilterBtn) return;
+  const on = Boolean(state.filters.integrated);
+  integratedFilterBtn.setAttribute("aria-pressed", String(on));
+  integratedFilterBtn.classList.toggle("active", on);
+}
+
+// Clear every filter: free-text query, date ranges, tag selection and the
+// integration toggle.
 function resetFilters() {
   state.query = "";
   if (searchInput) searchInput.value = "";
@@ -580,6 +691,7 @@ function resetFilters() {
     if (input) input.value = "";
   });
   state.filters.tags = [];
+  state.filters.integrated = false;
   render();
 }
 
@@ -617,6 +729,7 @@ function renderTagFilter() {
 // ---- Boot -----------------------------------------------------------------
 async function reload() {
   state.frames = await Api.getBoard();
+  await refreshLinkedCards();
   render();
 }
 
@@ -855,6 +968,7 @@ async function loadActiveBoard(reloadBoard = false) {
   refreshBoardSync(); // keep the per-board Agent1 sync toggle in sync
   if (reloadBoard || state.frames.length === 0) {
     state.frames = await Api.getBoard();
+    await refreshLinkedCards(); // linked ids are per-board: refresh on switch
     resetFilters(); // a board switch always starts with no filters applied
   }
 }

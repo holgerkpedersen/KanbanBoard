@@ -1,11 +1,15 @@
 /*
  * Node test for the Kanban board search filter in static/search.js.
  *
- * Regression: the System property of a card was not searched, so a card
+ * Regression 1: the System property of a card was not searched, so a card
  * could only be found by title, text or tag. The search filter must also
  * match the card's system name.
  *
- * No browser/jsdom required: matchesQuery is pure and side-effect free.
+ * Regression 2 (T4): the "integrated with Agent1" toggle. When off every
+ * card passes; when on only cards whose id is in the shared linked-id map
+ * pass. linkedIds arrives as a Set from the app, but Arrays must work too.
+ *
+ * No browser/jsdom required: the helpers are pure and side-effect free.
  */
 const assert = require("assert");
 const {
@@ -13,6 +17,7 @@ const {
   localDateOf,
   matchesDates,
   matchesTags,
+  matchesIntegration,
   filtersActive,
   filterCard,
 } = require("../src/agent1/static/search.js");
@@ -139,6 +144,88 @@ assert.strictEqual(
   true
 );
 
+// --- Integration toggle (Agent1 ↔ Kanban linked-id map) ----------------------
+const LINKED = {
+  id: "i1",
+  title: "Linked card",
+  text: "",
+  tags: [],
+  frame_id: "f1",
+  created_at: noon(2026, 3, 10),
+  updated_at: noon(2026, 3, 20),
+};
+const UNLINKED = {
+  id: "i2",
+  title: "Unlinked card",
+  text: "",
+  tags: [],
+  frame_id: "f1",
+  created_at: noon(2026, 3, 10),
+  updated_at: noon(2026, 3, 20),
+};
+
+// Toggle off (flag absent, false, 0, "") -> filter inactive, every card passes.
+assert.strictEqual(matchesIntegration(LINKED, {}, new Set()), true);
+assert.strictEqual(matchesIntegration(UNLINKED, {}, new Set()), true);
+assert.strictEqual(matchesIntegration(LINKED, { integrated: false }, new Set()), true);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: false }, []), true);
+assert.strictEqual(matchesIntegration(LINKED, { integrated: 0 }, null), true);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: "" }, undefined), true);
+// No filters object at all -> inactive, passes.
+assert.strictEqual(matchesIntegration(LINKED, null, new Set()), true);
+assert.strictEqual(matchesIntegration(UNLINKED, undefined, []), true);
+
+// Toggle on -> only cards whose id is in linkedIds pass.
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, new Set(["i1"])), true);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: true }, new Set(["i1"])), false);
+
+// Set input works (the app's native shape).
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, new Set(["i1", "i2"])), true);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: true }, new Set(["i1", "i2"])), true);
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, new Set()), false);
+// Array input works.
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, ["i1"]), true);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: true }, ["i1", "i2"]), true);
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, []), false);
+// An empty / missing linked map with the toggle on hides every card.
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: true }, null), false);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: true }, undefined), false);
+
+// A non-string id never matches, even when String(id) would collide.
+assert.strictEqual(matchesIntegration({ id: 1 }, { integrated: true }, [1]), false);
+assert.strictEqual(matchesIntegration({ title: "No id" }, { integrated: true }, new Set()), false);
+
+// Unknown ids in the linked map are harmless (no throw, no side effects).
+const BIG = new Set(["i1", "zz-does-not-exist", "ghost-42"]);
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, BIG), true);
+assert.strictEqual(matchesIntegration(UNLINKED, { integrated: true }, BIG), false);
+assert.strictEqual(matchesIntegration(LINKED, { integrated: true }, ["ghost", "i1", "ghost2"]), true);
+
+// --- Integration AND-combines with the other groups --------------------------
+// Toggle on + linked + everything else matches -> visible.
+assert.strictEqual(filterCard(LINKED, "linked", { integrated: true }, ["i1"]), true);
+// Query fails but integration passes -> hidden (AND).
+assert.strictEqual(filterCard(LINKED, "zzz", { integrated: true }, ["i1"]), false);
+// Integration fails (not linked) although the query matches -> hidden.
+assert.strictEqual(filterCard(UNLINKED, "unlinked", { integrated: true }, ["i1"]), false);
+// Toggle on + linked + active date range excludes it -> hidden.
+assert.strictEqual(
+  filterCard(LINKED, "", { integrated: true, createdFrom: "2026-03-11" }, new Set(["i1"])),
+  false
+);
+// Toggle on + linked + tag selection excludes it -> hidden.
+assert.strictEqual(
+  filterCard(LINKED, "", { integrated: true, tags: ["kubernetes"] }, new Set(["i1"])),
+  false
+);
+// All groups active and matching (query + date + tags + integration).
+assert.strictEqual(
+  filterCard(LINKED, "linked", { integrated: true, createdFrom: "2026-03-10", tags: [] }, new Set(["i1"])),
+  true
+);
+// Toggle off with the same filters: linked status is irrelevant -> passes.
+assert.strictEqual(filterCard(UNLINKED, "unlinked", { integrated: false }, []), true);
+
 // --- filtersActive helper -----------------------------------------------------
 assert.strictEqual(filtersActive({}), false);
 assert.strictEqual(
@@ -147,5 +234,8 @@ assert.strictEqual(
 );
 assert.strictEqual(filtersActive({ tags: ["a"] }), true);
 assert.strictEqual(filtersActive({ updatedFrom: "2026-03-01" }), true);
+// The integration toggle alone makes the filters active.
+assert.strictEqual(filtersActive({ integrated: true }), true);
+assert.strictEqual(filtersActive({ integrated: false }), false);
 
 console.log("test_search_filter: ALL PASS");

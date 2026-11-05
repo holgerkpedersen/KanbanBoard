@@ -92,6 +92,8 @@ def test_main_js_delegates_search_to_helper():
     into CardSearch; it never re-implements matching itself.
     """
     main_js = (STATIC_DIR / "main.js").read_text(encoding="utf-8")
-    assert "CardSearch.filterCard(card, state.query, state.filters)" in main_js
+    # Delegation call may carry extra args (e.g. the linked-id set); match
+    # the call head, not an exact signature.
+    assert "CardSearch.filterCard(card, state.query, state.filters" in main_js
     # The old inline filter returned early on title; that blind copy is gone.
     assert "function matchesQuery(card) {\n  const q" not in main_js

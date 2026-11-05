@@ -109,12 +109,30 @@
   }
 
   /**
+   * Does `card` satisfy the "integrated with Agent1" filter?
+   *
+   * `linkedIds` is the set (or array) of card ids present in the shared
+   * Agent1 ↔ Kanban id map. The filter is inactive unless
+   * `filters.integrated` is truthy; when active, only linked cards pass.
+   */
+  function matchesIntegration(card, filters, linkedIds) {
+    if (!filters || !filters.integrated) return true;
+    if (!card) return false;
+    const id = typeof card.id === "string" ? card.id : "";
+    if (!id) return false;
+    if (linkedIds instanceof Set) return linkedIds.has(id);
+    return Array.isArray(linkedIds) && linkedIds.indexOf(id) !== -1;
+  }
+
+  /**
    * Is any filter active? A date group counts when it has a non-blank
-   * bound; the tag group counts when at least one tag is selected. Used to
-   * show the "filtered" hint and enable the Clear button.
+   * bound; the tag group counts when at least one tag is selected; the
+   * integration toggle counts when on. Used to show the "filtered" hint
+   * and enable the Clear button.
    */
   function filtersActive(f) {
     if (!f) return false;
+    if (f.integrated) return true;
     const keys = ["createdFrom", "createdTo", "updatedFrom", "updatedTo"];
     if (keys.some((k) => typeof f[k] === "string" && f[k].trim() !== "")) return true;
     return (
@@ -125,14 +143,15 @@
 
   /**
    * Combined visibility test: free-text query AND tag selection AND active
-   * date ranges. All three groups combine with AND; each inactive group is
-   * a no-op.
+   * date ranges AND the integration toggle. All groups combine with AND;
+   * each inactive group is a no-op.
    */
-  function filterCard(card, query, filters) {
+  function filterCard(card, query, filters, linkedIds) {
     return (
       matchesQuery(card, query) &&
       matchesTags(card, filters && filters.tags) &&
-      matchesDates(card, filters)
+      matchesDates(card, filters) &&
+      matchesIntegration(card, filters, linkedIds)
     );
   }
 
@@ -141,6 +160,7 @@
     matchesQuery,
     matchesDates,
     matchesTags,
+    matchesIntegration,
     filtersActive,
     filterCard,
   };

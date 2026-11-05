@@ -169,6 +169,27 @@ def resolve_id(source_id: str) -> str | None:
     return mapping.get(source_id)
 
 
+# Agent1 issue ids all start with this prefix (e.g. ``iss-general-kanban_<card>``).
+# The id map is bidirectional, so the prefix is what tells an Agent1 issue id
+# apart from a Kanban card id inside it.
+ISSUE_ID_PREFIX = "iss-"
+
+
+def linked_card_ids() -> set[str]:
+    """Return the ids of Kanban cards that are linked to an Agent1 issue.
+
+    The shared ``.card_id_map.json`` stores every pair twice (issue→card and
+    card→issue), so a card id is any *key* whose value starts with
+    ``ISSUE_ID_PREFIX``.  A missing, unreadable or malformed map yields an
+    empty set: the caller must degrade to "nothing is integrated", never raise.
+    """
+    ids: set[str] = set()
+    for key, value in _load_id_map().items():
+        if isinstance(value, str) and value.startswith(ISSUE_ID_PREFIX):
+            ids.add(key)
+    return ids
+
+
 # --- Issue → Card conversion ---------------------------------------------------
 
 # Issue status → board frame *title*.  These are titles, not ids: a board is
@@ -301,6 +322,39 @@ def _payload_of(msg: dict[str, Any], *, require_title: bool = False) -> dict[str
     return payload
 
 
+def _resolve_card_id_for_message(msg: dict[str, Any]) -> tuple[str | None, str, str | None]:
+    """Resolve the Kanban card id referenced by an issue message.
+
+    Returns ``(card_id, origin, mapped_card_id)``.  ``origin`` tells the
+    caller where the id came from:
+
+    - ``"target_ref"``: an explicit Kanban card id supplied by the sender.
+    - ``"map"``: a bidirectional issue↔card mapping entry.
+    - ``"locations"``: a ``kanban:<id>`` location found in the payload.
+    - ``"unmapped"``: no card id could be resolved.
+
+    The origin is used to distinguish a permanent "untracked card" no-op
+    from a loud anomaly where a mapped card should exist.
+    """
+    source_id = msg.get("source_id", "")
+    target_ref = msg.get("target_ref", "")
+    mapped_card_id = resolve_id(source_id) if source_id else None
+
+    if target_ref:
+        return target_ref, "target_ref", mapped_card_id
+
+    if mapped_card_id:
+        return mapped_card_id, "map", mapped_card_id
+
+    issue = _payload_of(msg)
+    if isinstance(issue, dict):
+        for loc in (issue.get("locations") or []):
+            if isinstance(loc, str) and loc.startswith("kanban:"):
+                return loc.split(":", 1)[1], "locations", mapped_card_id
+
+    return None, "unmapped", mapped_card_id
+
+
 def _apply_issue_create(msg: dict[str, Any], store: Any) -> bool:
     """Create a Kanban card from an Agent1 issue CREATE message.
 
@@ -373,21 +427,40 @@ def _apply_issue_update(msg: dict[str, Any], store: Any) -> bool:
     if not source_id and not target_ref:
         return False
 
-    # Look up the card by either the issue's source_id (via mapping) or direct target_ref
-    card_id = None
-    if target_ref:
-        card_id = target_ref
-    elif source_id:
-        card_id = resolve_id(source_id)
+    card_id, origin, mapped_card_id = _resolve_card_id_for_message(msg)
 
     if not card_id:
-        logger.warning("issue_update: no matching card for source=%s, target=%s", source_id, target_ref)
+        if source_id:
+            logger.info(
+                "issue_update: untracked source %s has no card; treating as quiet no-op",
+                source_id,
+            )
+            return True
+        logger.warning(
+            "issue_update: no matching card for source=%s, target=%s",
+            source_id,
+            target_ref,
+        )
         return False
 
     card = store.get_card(card_id)
     if card is None:
-        logger.warning("issue_update: card %s not found", card_id)
-        return False
+        if origin == "target_ref":
+            logger.warning("issue_update: card %s not found (target_ref=%s)", card_id, card_id)
+            return False
+        if origin == "map" or card_id == mapped_card_id:
+            logger.warning(
+                "issue_update: mapped card %s not found for source=%s",
+                card_id,
+                source_id,
+            )
+            return False
+        logger.info(
+            "issue_update: untracked card %s not found; treating as quiet no-op (source=%s)",
+            card_id,
+            source_id,
+        )
+        return True
 
     issue = _payload_of(msg)
     if issue is None:
@@ -406,7 +479,7 @@ def _apply_issue_update(msg: dict[str, Any], store: Any) -> bool:
     new_status = _status_of(issue)
     if data.get("tags"):
         # Remove old status tag, add new one
-        tags = [t for t in data["tags"] if not t.startswith("[status:")]
+        tags = [t for t in (getattr(card, "tags", []) or []) if not t.startswith("[status:")]
         if new_status:
             tags.append(f"[status:{new_status}]")
         card.tags = tags
@@ -427,20 +500,36 @@ def _apply_issue_resolve(msg: dict[str, Any], store: Any) -> bool:
     if not source_id and not target_ref:
         return False
 
-    card_id = None
-    if target_ref:
-        card_id = target_ref
-    elif source_id:
-        card_id = resolve_id(source_id)
+    card_id, origin, mapped_card_id = _resolve_card_id_for_message(msg)
 
     if not card_id:
+        if source_id:
+            logger.info(
+                "issue_resolve: untracked source %s has no card; treating as quiet no-op",
+                source_id,
+            )
+            return True
         logger.warning("issue_resolve: no matching card for source=%s", source_id)
         return False
 
     card = store.get_card(card_id)
     if card is None:
-        logger.warning("issue_resolve: card %s not found", card_id)
-        return False
+        if origin == "target_ref":
+            logger.warning("issue_resolve: card %s not found (target_ref=%s)", card_id, card_id)
+            return False
+        if origin == "map" or card_id == mapped_card_id:
+            logger.warning(
+                "issue_resolve: mapped card %s not found for source=%s",
+                card_id,
+                source_id,
+            )
+            return False
+        logger.info(
+            "issue_resolve: untracked card %s not found; treating as quiet no-op (source=%s)",
+            card_id,
+            source_id,
+        )
+        return True
 
     # Move to Finished. ``get_frame``/``move_card`` take a frame *id*, so the
     # title has to be resolved first — passing "Finished" directly silently
@@ -455,8 +544,9 @@ def _apply_issue_resolve(msg: dict[str, Any], store: Any) -> bool:
         return False
 
     # Update status tag
-    tags = [t for t in card.tags if not t.startswith("[status:")]
-    disposition = msg.get("payload", {}).get("disposition", "resolved")
+    tags = [t for t in (getattr(card, "tags", []) or []) if not t.startswith("[status:")]
+    payload = msg.get("payload")
+    disposition = payload.get("disposition", "resolved") if isinstance(payload, dict) else "resolved"
     tags.append(f"[status:{disposition}]")
     card.tags = tags
     store.update_card(card)

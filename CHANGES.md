@@ -2,6 +2,35 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-02 — The card editor grows with its description field
+
+- **Width follow.** Dragging the description field wider now widens the whole
+  editor panel, so the other fields stay aligned inside it instead of the field
+  poking out of the panel. The field is `resize: both` (it was `vertical`) and
+  no longer carries a `max-width`, which would have capped the drag at the
+  current panel width and left the feature doing nothing. `.card-modal-card`
+  gains `flex: 0 0 auto` so its width is honoured inside the flex overlay
+  instead of being pinned to its content-based minimum, plus `min-width: 0`;
+  the existing `max-width: 94vw` still keeps the widened panel on screen.
+- **Architecture.** The sizing maths lives in `static/modalwidth.js` as pure
+  functions (`clamp`, `cardWidthForTextarea`, `planSizes`) so it is testable in
+  Node without a browser; `main.js` only reads the DOM, writes the widths and
+  owns the `ResizeObserver`. The observer watches the panel as well as the
+  field, a `syncingCardWidth` flag stops the two writers from chasing each
+  other, and each open resets to the stylesheet width so a width dragged for
+  one card does not leak into the next.
+- **Fix: the JS and CSS caps disagreed.** `planSizes` capped the panel at the
+  full viewport while `style.css` caps it at `94vw`. Since `max-width` still
+  applies to the inline width, the browser rendered a narrower panel than the
+  field was sized for and the field overflowed — the exact bug the feature
+  exists to prevent. Both now use the same 94% figure (`VIEWPORT_FRACTION`),
+  and a test asserts the two numbers match.
+- **Tests.** New `tests/test_modalwidth_js.py` drives the real shipped helper
+  through Node (`tests/test_modalwidth_js.js`); `tests/test_card_modal.py` pins
+  the CSS contract (`resize: both`, no `max-width`, the flex/min/max properties,
+  full-width fields), the script load order before `main.js`, the `main.js`
+  wiring, and the CSS/JS cap agreement.
+
 ## 2026-11-02 — Copyable card IDs + roomier card editor
 
 - **Copyable card ID.** Every card now shows its ID on the board and, for

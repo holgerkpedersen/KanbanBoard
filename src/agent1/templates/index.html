@@ -61,6 +61,13 @@
       <input id="filter-updated-to" type="date" class="date-input" aria-label="Updated to date" />
     </div>
     <div id="tag-filter" class="tag-filter" role="group" aria-label="Tag filters"></div>
+    <button
+      id="filter-integrated"
+      class="btn btn-ghost filter-integrated"
+      type="button"
+      aria-pressed="false"
+      title="Show only cards linked to an Agent1 issue"
+    >🔗 Integrated</button>
     <button id="clear-filters" class="btn btn-ghost filter-clear" type="button">Clear</button>
   </section>
 
@@ -124,6 +131,7 @@
     <article class="card" draggable="true" role="listitem">
       <div class="card-title"></div>
       <p class="card-text"></p>
+      <div class="card-integrated-badge" hidden>🔗 Agent1</div>
       <div class="card-system" hidden></div>
       <div class="card-tags"></div>
       <div class="card-id-row">
@@ -177,6 +185,7 @@
   <script src="{{ url_for('static', filename='dnd.js') }}" defer></script>
   <script src="{{ url_for('static', filename='search.js') }}" defer></script>
   <script src="{{ url_for('static', filename='cardid.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='modalwidth.js') }}" defer></script>
   <script src="{{ url_for('static', filename='main.js') }}" defer></script>
 </body>
 </html>

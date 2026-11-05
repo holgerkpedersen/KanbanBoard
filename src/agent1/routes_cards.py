@@ -12,7 +12,7 @@ import os
 import uuid
 
 from .store import BoardStore
-from .models import Card, now_iso
+from .models import Card, now_iso, VALID_STATUSES
 from .security import (
     validate_card_title,
     validate_card_text,
@@ -79,6 +79,9 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             title = validate_card_title(str(data.get("title", "")))
             text = validate_card_text(str(data.get("text", "")))
             system = validate_card_system(str(data.get("system", "")))
+            raw_status = data.get("status", "open")
+            if not isinstance(raw_status, str) or raw_status not in VALID_STATUSES:
+                return jsonify({"error": f"invalid status: {raw_status!r}"}), 400
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         raw_tags = data.get("tags", [])
@@ -93,6 +96,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             system=system,
             created_at=created,
             updated_at=created,
+            status=raw_status,
         )
         store.add_card(card, frame_id)
 
@@ -114,6 +118,23 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
     def list_cards() -> Response:
         cards = current_store().get_all_cards()
         return apply_security_headers(jsonify([c.to_dict() for c in cards]))
+
+    @bp.route("/linked", methods=["GET"])
+    def linked_cards() -> Response:
+        """Card ids that are integrated with an Agent1 issue.
+
+        Read-only view of the shared ``.card_id_map.json`` — no writes, no
+        schema changes, so it cannot affect the sync pipeline.  When the sync
+        module is unavailable the answer is "nothing is linked".
+        """
+        kb = _get_kanban_sync()
+        ids: list[str] = []
+        if kb is not None:
+            try:
+                ids = sorted(kb.linked_card_ids())
+            except Exception:  # noqa: BLE001 — endpoint must never 500 on a stale map
+                ids = []
+        return apply_security_headers(jsonify({"card_ids": ids}))
 
     @bp.route("/<card_id>", methods=["GET"])
     def read_card(card_id: str) -> Response:
@@ -151,6 +172,11 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             card.tags = (
                 [str(t) for t in raw_tags] if isinstance(raw_tags, list) else []
             )
+        if "status" in data:
+            new_status = str(data["status"])
+            if new_status not in VALID_STATUSES:
+                return jsonify({"error": f"invalid status: {new_status!r}"}), 400
+            card.status = new_status
         if "frame_id" in data:
             fid = str(data["frame_id"])
             if store.get_frame(fid) is None:
@@ -231,6 +257,7 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
                     "payload": {
                         "frame_id": fid,
                         "frame_title": moved_frame.title if moved_frame else "",
+                        "status": card.status,
                     },
                 })
 

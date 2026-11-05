@@ -186,6 +186,7 @@ class BoardStore:
                 system=c.get("system", ""),
                 created_at=str(c.get("created_at", "")),
                 updated_at=str(c.get("updated_at", "")),
+                status=c.get("status", "open"),
             )
             self._cards[card.id] = card
 
