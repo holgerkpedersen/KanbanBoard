@@ -91,6 +91,9 @@ const state = {
     // True = show only cards integrated with Agent1 (in the id map).
     integrated: false,
   },
+  // Whether card descriptions are shown on the board. Persists to localStorage
+  // under "kanban.showDescriptions" so it survives page reloads. Default is true.
+  showDescriptions: localStorage.getItem("kanban.showDescriptions") !== "0",
   // Card ids linked to an Agent1 issue, loaded from /api/cards/linked.
   // Empty set when the endpoint fails — colouring/filtering degrade to
   // "nothing is integrated", never an error.
@@ -233,6 +236,7 @@ function render() {
   refreshSystemList();
   renderTagFilter();
   renderIntegratedFilter();
+  renderDescriptionFilter();
 }
 
 // Keep the System <datalist> in sync with the systems used on the board so
@@ -301,8 +305,12 @@ function renderCard(card) {
 
   $(".card-title", node).textContent = card.title;
   const text = $(".card-text", node);
-  if (card.text) text.textContent = card.text;
-  else text.remove();
+  if (card.text) {
+    text.textContent = card.text;
+    text.classList.toggle("card-text-hidden", !state.showDescriptions);
+  } else {
+    text.remove();
+  }
 
   // Integrated cards (linked to an Agent1 issue in the shared id map) get
   // a distinct colour and a badge; plain cards keep the default look.
@@ -678,6 +686,23 @@ function renderIntegratedFilter() {
   const on = Boolean(state.filters.integrated);
   integratedFilterBtn.setAttribute("aria-pressed", String(on));
   integratedFilterBtn.classList.toggle("active", on);
+}
+
+// "Show Descriptions" toggle: reveal or hide card description text on the board.
+const showDescriptionsBtn = document.getElementById("show-descriptions");
+if (showDescriptionsBtn) {
+  showDescriptionsBtn.addEventListener("click", () => {
+    state.showDescriptions = !state.showDescriptions;
+    localStorage.setItem("kanban.showDescriptions", state.showDescriptions ? "1" : "0");
+    render();
+  });
+}
+
+function renderDescriptionFilter() {
+  if (!showDescriptionsBtn) return;
+  const on = Boolean(state.showDescriptions);
+  showDescriptionsBtn.setAttribute("aria-pressed", String(on));
+  showDescriptionsBtn.classList.toggle("active", on);
 }
 
 // Clear every filter: free-text query, date ranges, tag selection and the

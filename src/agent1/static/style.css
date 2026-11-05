@@ -363,6 +363,7 @@ html, body {
   overflow-wrap: anywhere;
 }
 .card-text { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-wrap; }
+.card-text-hidden { display: none; }
 .card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
   background: var(--tag-bg);
