@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ g.csrf_token }}" />
   <title>Kanban Board</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
@@ -33,6 +34,7 @@
       autocomplete="off"
       aria-label="Search cards"
     />
+    <a href="/tree-view" class="btn" style="text-decoration:none;">📂 Tree View</a>
     <button id="add-frame" class="btn btn-primary" type="button">+ Add Frame</button>
     <label class="theme-picker">
       <span class="visually-hidden">Theme</span>
@@ -99,6 +101,12 @@
         System
         <input id="card-system" name="system" type="text" maxlength="60" list="system-list" placeholder="e.g. Billing, Auth, API" />
         <datalist id="system-list"></datalist>
+      </label>
+      <label>
+        Parent card (optional)
+        <select id="card-parent">
+          <option value="">— None —</option>
+        </select>
       </label>
       <div id="card-id-field" class="modal-id-field" hidden>
         <span class="modal-id-label">Card ID</span>

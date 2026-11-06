@@ -25,7 +25,7 @@ import tempfile
 import threading
 from typing import Optional
 
-from flask import Flask, Response, request, render_template, make_response, g
+from flask import Flask, Response, request, render_template, make_response, g, jsonify
 
 from .store import BoardStore
 from .board_registry import BoardRegistry
@@ -33,7 +33,7 @@ from .board_catalog import BoardCatalog
 from .routes_frames import create_frame_blueprint
 from .routes_cards import create_card_blueprint
 from .routes_boards import create_boards_blueprint
-from .security import apply_security_headers
+from .security import apply_security_headers, generate_csrf_token, require_auth
 
 # Default on-disk locations for the *production* app. The module-level
 # ``app`` below passes these explicitly. Tests call create_app() with no
@@ -137,13 +137,12 @@ def create_app(
     app.config["LIVE_STORE_HOLDER"] = holder
 
     # Per-request hook: bind the currently-active store onto g so the
-    # frames/cards blueprints pick it up via their current_store() helper.
-    # If no board is active yet (no /api/boards/select call this run),
-    # allocate a single persistent in-memory store on the holder and
-    # reuse it across requests. That keeps the test suite, which never
-    # selects a board, working with a single in-memory board.
+    # frames/cards blueprints pick it up via their current_store() helper,
+    # generate a CSRF token for write-endpoint validation, and enforce
+    # authentication (CSRF token or API key) on every /api/* write request.
     @app.before_request
-    def _bind_active_store() -> None:
+    def _bind_active_store_and_auth() -> None:
+        # -- store binding --------------------------------------------------
         holder = app.config["LIVE_STORE_HOLDER"]
         with holder["lock"]:
             store = holder["store"]
@@ -152,6 +151,17 @@ def create_app(
                 holder["store"] = store
                 holder["path"] = None
         g.board_store = store
+
+        # -- CSRF token generation ------------------------------------------
+        # Always generate a fresh token; the frontend reads it from the HTML
+        # response and sends it back on every mutating request.
+        g.csrf_token = generate_csrf_token()
+
+        # -- Centralised auth check for /api/* write endpoints ---------------
+        if request.path.startswith("/api/"):
+            auth_error = require_auth(request)
+            if auth_error is not None:
+                return jsonify(auth_error), 403
 
     # Register blueprints. The frames/cards blueprints accept a
     # "bootstrap" store arg for legacy/test usage; the per-request
@@ -212,7 +222,7 @@ def create_app(
             _sync_handles[0].app = app
             logger.info("Reusing the process's sync processor for this app")
         else:
-            logger.warning("Kanban sync enabled, but no processor is available to start")
+            logger.warning("Kanban sync enabled but no processor is available to start")
 
     @app.get("/")
     def index() -> Response:
@@ -220,6 +230,13 @@ def create_app(
         # by the strict CSP (script-src 'self' 'nonce-...').
         nonce = secrets.token_hex(16)
         resp = make_response(render_template("index.html", theme_nonce=nonce))
+        return apply_security_headers(resp, nonce)
+
+    @app.get("/tree-view")
+    def tree_view() -> Response:
+        """Tree view of cards: parent → child hierarchy grouped by frame."""
+        nonce = secrets.token_hex(16)
+        resp = make_response(render_template("tree_view.html", theme_nonce=nonce))
         return apply_security_headers(resp, nonce)
 
     @app.after_request

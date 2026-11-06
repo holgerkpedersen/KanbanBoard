@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from typing import Dict, List, Optional
 
 
@@ -46,12 +45,15 @@ class BoardCatalog:
 
     # ---- public API --------------------------------------------------------
     def list(self) -> List[Dict[str, str]]:
-        """Return ``[{id, name, source_path}, ...]``, sorted by id.
+        """Return ``[{id, name}, ...]``, sorted by id.
 
         Silently skips files whose name is not a valid catalog id or
         whose JSON cannot be parsed. Agent1 is the only writer, so a
         parse failure here means the seed is mid-write — the next
         refresh will pick it up.
+
+        Note: ``source_path`` is deliberately excluded to prevent
+        information leakage that could aid path-traversal attacks.
         """
         try:
             mtime = os.path.getmtime(self._folder)
@@ -74,9 +76,7 @@ class BoardCatalog:
             if not os.path.isfile(path):
                 continue
             display = self._read_display_name(path) or cid
-            entries.append(
-                {"id": cid, "name": display, "source_path": path}
-            )
+            entries.append({"id": cid, "name": display})
         self._cache = entries
         self._cache_mtime = mtime
         return list(entries)

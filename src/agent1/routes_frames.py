@@ -7,14 +7,13 @@ from flask import (
     make_response,
     Response,
 )
-from typing import Any, Dict
+from typing import Any, Dict, List
 import uuid
 
 from .store import BoardStore
-from .models import Frame
+from .models import Frame, Card
 from .security import (
     validate_frame_title,
-    has_csrf_header,
     apply_security_headers,
 )
 
@@ -40,8 +39,6 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("", methods=["POST"])
     def create_frame() -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         data: Dict[str, Any] = request.get_json(silent=True) or {}
         try:
             title = validate_frame_title(str(data.get("title", "")))
@@ -84,8 +81,6 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/<frame_id>", methods=["PUT"])
     def update_frame(frame_id: str) -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         store = current_store()
         frame = store.get_frame(frame_id)
         if frame is None:
@@ -101,8 +96,6 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/<frame_id>", methods=["DELETE"])
     def delete_frame(frame_id: str) -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         if current_store().get_frame(frame_id) is None:
             return jsonify({"error": "not found"}), 404
         current_store().delete_frame(frame_id)
@@ -111,8 +104,6 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/reorder", methods=["POST"])
     def reorder_frames() -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         data: Dict[str, Any] = request.get_json(silent=True) or {}
         order = data.get("order")
         if not isinstance(order, list) or not all(
@@ -121,5 +112,51 @@ def create_frame_blueprint(store: BoardStore) -> Blueprint:
             return jsonify({"error": "order required"}), 400
         current_store().reorder_frames(order)
         return apply_security_headers(jsonify({"ok": True}))
+
+    @bp.route("/tree", methods=["GET"])
+    def get_board_tree() -> Response:
+        """Return the board as a card tree: each frame lists parent cards,
+        and every parent carries its ``children`` list of direct child cards.
+
+        Cards without a ``parent_id`` are treated as roots.  Child cards that
+        also happen to have children are recursed automatically so the result
+        is a proper n-ary tree (not just one level).
+
+        A maximum depth of 50 prevents infinite recursion from circular
+        parent_id references in corrupt board data.
+        """
+        MAX_TREE_DEPTH = 50
+
+        store = current_store()
+        all_cards: Dict[str, Card] = {c.id: c for c in store.get_all_cards()}
+
+        def _build_tree(card_id: str, depth: int) -> Dict[str, Any]:
+            if depth > MAX_TREE_DEPTH:
+                return {"id": card_id, "title": "(truncated)", "children": []}
+            card = all_cards[card_id]
+            node: Dict[str, Any] = card.to_dict()
+            children = [
+                cid for cid, c in all_cards.items() if c.parent_id == card_id
+            ]
+            # Sort children by title for stable rendering.
+            children.sort(key=lambda cid: (all_cards[cid].title or "").lower())
+            node["children"] = [_build_tree(cid, depth + 1) for cid in children]
+            return node
+
+        tree: List[Dict[str, Any]] = []
+        for frame in store.get_all_frames():
+            root_ids = [
+                cid for cid in frame.card_ids
+                if all_cards[cid].parent_id == "" or cid not in all_cards
+            ]
+            # Sort roots by title.
+            root_ids.sort(key=lambda cid: (all_cards[cid].title or "").lower())
+            tree.append({
+                "frame_id": frame.id,
+                "frame_title": frame.title,
+                "parents": [_build_tree(cid, 1) for cid in root_ids],
+            })
+
+        return apply_security_headers(jsonify(tree))
 
     return bp

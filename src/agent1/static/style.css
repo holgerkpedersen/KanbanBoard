@@ -84,6 +84,7 @@
 :root[data-theme="contrast"] .frame-title,
 :root[data-theme="contrast"] .modal-card input,
 :root[data-theme="contrast"] .modal-card textarea,
+:root[data-theme="contrast"] .modal-card select,
 :root[data-theme="contrast"] .date-input,
 :root[data-theme="contrast"] .tag-chip,
 :root[data-theme="contrast-dark"] .btn,
@@ -94,6 +95,7 @@
 :root[data-theme="contrast-dark"] .frame-title,
 :root[data-theme="contrast-dark"] .modal-card input,
 :root[data-theme="contrast-dark"] .modal-card textarea,
+:root[data-theme="contrast-dark"] .modal-card select,
 :root[data-theme="contrast-dark"] .date-input,
 :root[data-theme="contrast-dark"] .tag-chip {
   border-width: 2px;
@@ -492,7 +494,13 @@ html, body {
   background: var(--surface-2); border: 1px solid var(--border);
   color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 14px; outline: none;
 }
-.modal-card input:focus, .modal-card textarea:focus { border-color: var(--accent); }
+.modal-card select {
+  /* Match input/textarea styles but keep native appearance (dropdown arrow). */
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 14px; outline: none;
+}
+.modal-card input:focus, .modal-card textarea:focus,
+.modal-card select:focus { border-color: var(--accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .empty-hint { color: var(--muted); font-size: 12px; padding: 6px; text-align: center; }
@@ -542,7 +550,8 @@ html, body {
 /* Stretch every field to the panel width so they stay aligned with a widened
    description instead of hugging their own text. */
 .card-modal-card label > input,
-.card-modal-card label > textarea {
+.card-modal-card label > textarea,
+.card-modal-card label > select {
   width: 100%;
 }
 

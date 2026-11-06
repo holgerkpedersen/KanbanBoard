@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional
 from flask import Blueprint, current_app, jsonify, request, Response
 
 from .board_catalog import BoardCatalog
-from .security import apply_security_headers, has_csrf_header
+from .security import apply_security_headers
 from .store import BoardStore, atomic_write_json
 
 
@@ -101,7 +101,12 @@ def _ensure_working_copy(catalog_id: str) -> str:
 
 
 def _summary() -> Dict[str, Any]:
-    """Build the response body for GET /api/boards."""
+    """Build the response body for GET /api/boards.
+
+    Internal filesystem paths are deliberately excluded from this
+    response to prevent information leakage that could aid path-
+    traversal or local-file-inclusion attacks.
+    """
     cat = _catalog()
     active_id = current_app.config["BOARD_REGISTRY"].get_active()
     holder = current_app.config["LIVE_STORE_HOLDER"]
@@ -111,8 +116,6 @@ def _summary() -> Dict[str, Any]:
         "catalog": cat.list(),
         "active": active_id,
         "current_path": current_path,
-        "working_dir": _working_dir(),
-        "catalog_dir": cat.folder,
     }
 
 
@@ -141,7 +144,6 @@ def create_boards_blueprint() -> Blueprint:
                 {
                     "id": entry["id"],
                     "name": entry["name"],
-                    "source_path": entry["source_path"],
                     "current_path": current_path,
                     # Per-board external-sync opt-in map (e.g. {"agent1": true}).
                     "sync": store.get_sync_settings() if store is not None else {},
@@ -151,8 +153,6 @@ def create_boards_blueprint() -> Blueprint:
 
     @bp.route("/select", methods=["POST"])
     def select_board() -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         data: Dict[str, Any] = request.get_json(silent=True) or {}
         catalog_id = data.get("catalog_id")
         if not isinstance(catalog_id, str) or not catalog_id:
@@ -172,7 +172,6 @@ def create_boards_blueprint() -> Blueprint:
                 {
                     "id": entry["id"],
                     "name": entry["name"],
-                    "source_path": entry["source_path"],
                     "current_path": working,
                 }
             )
@@ -180,8 +179,6 @@ def create_boards_blueprint() -> Blueprint:
 
     @bp.route("/reset", methods=["POST"])
     def reset_board() -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         data: Dict[str, Any] = request.get_json(silent=True) or {}
         catalog_id = data.get("catalog_id")
         if not isinstance(catalog_id, str) or not catalog_id:
@@ -208,7 +205,6 @@ def create_boards_blueprint() -> Blueprint:
                 {
                     "id": entry["id"],
                     "name": entry["name"],
-                    "source_path": entry["source_path"],
                     "current_path": working,
                     "reset": True,
                 }
@@ -231,14 +227,17 @@ def create_boards_blueprint() -> Blueprint:
 
         CSRF + security headers apply, like every other mutating route.
         """
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
 
         payload: Optional[Dict[str, Any]] = None
         display_name: Optional[str] = None
 
         if request.files.get("file") is not None:
             uploaded = request.files["file"]
+            # Validate file extension — only allow .json files to prevent
+            # arbitrary code execution via malicious file uploads.
+            filename = (uploaded.filename or "").lower()
+            if not filename.endswith(".json"):
+                return jsonify({"error": "only .json files are accepted"}), 400
             raw = uploaded.read()
             try:
                 payload = json.loads(raw.decode("utf-8"))
@@ -269,26 +268,15 @@ def create_boards_blueprint() -> Blueprint:
             return jsonify({"error": "failed to register uploaded board"}), 500
         name = display_name or entry["name"]
 
-        # Optionally make this the active board immediately.
-        activate = request.args.get("activate") == "1" or bool(
-            isinstance(payload, dict) and payload.get("activate")
-        )
-        if activate:
-            try:
-                working = _ensure_working_copy(catalog_id)
-            except FileNotFoundError as exc:
-                return jsonify({"error": str(exc)}), 410
-            current_app.config["BOARD_REGISTRY"].set_active(catalog_id)
-            _swap_to_path(working)
+        # Auto-activation is disabled for security — uploaded boards are
+        # registered in the catalog but are NOT activated automatically.
+        # The user must explicitly select a board via POST /api/boards/select.
 
         body: Dict[str, Any] = {
             "id": entry["id"],
             "name": name,
-            "source_path": entry["source_path"],
-            "active": bool(activate),
+            "active": False,
         }
-        if activate:
-            body["current_path"] = _working_path(catalog_id)
         resp = jsonify(body)
         resp.status_code = 201
         return apply_security_headers(resp)
@@ -325,8 +313,6 @@ def create_boards_blueprint() -> Blueprint:
         which both this app and the Agent1 bridge read from disk, so it takes
         effect on both sides of the sync link without a restart.
         """
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         active_id = current_app.config["BOARD_REGISTRY"].get_active()
         holder = current_app.config["LIVE_STORE_HOLDER"]
         with holder["lock"]:

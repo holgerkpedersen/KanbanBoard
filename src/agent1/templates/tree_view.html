@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kanban Board — Tree View</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <style>
+    /* Tree-specific overrides — inherits all shared theme variables from style.css */
+    :root {
+      --child-bg: var(--surface-2);
+      --indent: 24px;
+      --card-border: var(--border);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px;
+      line-height: 1.5;
+    }
+
+    h1 {
+      margin-bottom: 8px;
+      font-size: 1.6rem;
+      color: var(--accent);
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 24px;
+      font-size: 0.9rem;
+    }
+
+    a.back-link, a.back-link:hover {
+      color: var(--accent);
+      text-decoration: none;
+      display: inline-block;
+      margin-bottom: 16px;
+    }
+    a.back-link:hover { text-decoration: underline; }
+
+    .frame-section {
+      margin-bottom: 32px;
+    }
+
+    .frame-title, .tree .frame-title {
+      font-size: 1.1rem;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+    }
+
+    /* Tree node */
+    .tree ul {
+      list-style: none;
+      padding-left: var(--indent);
+      border-left: 2px solid var(--border);
+      margin-left: 8px;
+    }
+
+    .tree > ul {
+      padding-left: 0;
+      border-left: none;
+      margin-left: 0;
+    }
+
+    .tree li {
+      position: relative;
+      margin-bottom: 6px;
+    }
+
+    /* Parent card */
+    .card-parent {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      user-select: none;
+      transition: box-shadow 0.15s;
+    }
+    .card-parent:hover {
+      box-shadow: var(--shadow);
+    }
+
+    .card-parent .title {
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .toggle-icon {
+      display: inline-block;
+      width: 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+      transition: transform 0.2s;
+    }
+    .toggle-icon.expanded {
+      transform: rotate(90deg);
+    }
+
+    .card-parent .meta,
+    .card-child .text-preview,
+    .card-child .meta,
+    #loading {
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    /* Child card */
+    .card-child {
+      background: var(--child-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-top: 4px;
+      font-size: 0.9rem;
+    }
+
+    .card-child .title {
+      color: var(--text);
+    }
+
+    .card-child .text-preview {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      max-height: 3em;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .card-child .meta {
+      margin-top: 3px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* Tags */
+    .tag {
+      display: inline-block;
+      background: var(--tag-bg, #292e42);
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-size: 0.72rem;
+      color: var(--tag-text, var(--accent));
+      margin-right: 4px;
+      margin-top: 4px;
+    }
+
+    /* Status badge */
+    .status {
+      display: inline-block;
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-size: 0.72rem;
+      text-transform: capitalize;
+      margin-left: auto;
+    }
+    .status-open        { background: var(--accent); color: #fff; }
+    .status-planned     { background: var(--accent-2, var(--accent)); color: #fff; }
+    .status-in-progress { background: #bb9af7; color: #2e2e3e; }
+    .status-reviewing   { background: var(--danger); color: #fff; }
+    .status-done        { background:  #9ece6a; color: #1a1b26; }
+
+    /* Expand/collapse all */
+    .controls {
+      margin-bottom: 16px;
+    }
+    .controls button {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+    .controls button:hover { background: var(--surface-2); }
+
+    /* Loading state */
+    #loading {
+      text-align: center;
+      padding: 60px;
+      color: var(--muted);
+    }
+    #error {
+      color: var(--danger);
+      background: rgba(255,91,110,0.1);
+      border: 1px solid var(--danger);
+      padding: 16px;
+      border-radius: 8px;
+      margin: 24px 0;
+      display: none;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      .tree ul { border-left-color: transparent; }
+      .card-parent, .card-child { padding: 8px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <a href="/" class="back-link">← Back to board view</a>
+  <h1>📂 Tree View</h1>
+  <p class="subtitle">Card hierarchy: parent cards with nested child cards, grouped by frame (column).</p>
+
+  <div class="controls" id="controls" hidden>
+    <button onclick="expandAll()">Expand all</button>
+    <button onclick="collapseAll()">Collapse all</button>
+  </div>
+
+  <!-- Theme picker (mirrors the one on index.html) -->
+  <label class="theme-picker">
+    <span class="visually-hidden">Theme</span>
+    <select id="theme-select" aria-label="Theme">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+      <option value="contrast">Contrast</option>
+      <option value="contrast-dark">Contrast Dark</option>
+    </select>
+  </label>
+
+  <div id="loading">Loading tree…</div>
+  <div id="error"></div>
+  <main class="tree" id="tree-root"></main>
+
+  <script nonce="{{ theme_nonce }}">
+    (function () {
+      // Load saved theme
+      var t = localStorage.getItem("kanban.theme") || "dark";
+      document.documentElement.setAttribute("data-theme", t);
+
+      // Theme selector — mirrors index.html behaviour.
+      var sel = document.getElementById('theme-select');
+      if (sel) {
+        sel.value = t;
+        sel.addEventListener('change', function () {
+          localStorage.setItem('kanban.theme', this.value);
+          document.documentElement.setAttribute('data-theme', this.value);
+        });
+      }
+    })();
+
+    var treeRoot = document.getElementById('tree-root');
+    var loadingEl = document.getElementById('loading');
+    var errorEl = document.getElementById('error');
+    var controlsEl = document.getElementById('controls');
+
+    function statusClass(s) { return 'status-' + (s || 'open').replace(/ /g, '-'); }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // Build a single card node (parent or child).
+    function renderCard(node, isChild) {
+      var tags = '';
+      if (node.tags && node.tags.length) {
+        tags = '<div>' + node.tags.map(function(t){ return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('') + '</div>';
+      }
+
+      // Shorten text preview to first 120 chars.
+      var textPreview = '';
+      if (node.text && !isChild) {
+        var shortText = node.text.length > 120 ? node.text.substring(0, 120) + '…' : escapeHtml(node.text);
+        textPreview = '<div class="text-preview">' + shortText + '</div>';
+      }
+
+      var html = '';
+      if (isChild) {
+        html += '<li><div class="card-child">';
+      } else {
+        html += '<li><div class="card-parent" onclick="toggleChildren(this)">';
+      }
+
+      var statusBadge = '<span class="' + statusClass(node.status) + '">' + (node.status || 'open') + '</span>';
+
+      if (isChild) {
+        html += '<div class="title">' + escapeHtml(node.title) + '</div>';
+      } else {
+        html += '<div class="title"><span class="toggle-icon" aria-hidden="true">▶</span>' + escapeHtml(node.title) + ' ' + statusBadge + '</div>';
+      }
+
+      if (node.system) {
+        html += '<div class="meta">System: ' + escapeHtml(node.system) + '</div>';
+      }
+      if (!isChild && node.created_at) {
+        var created = new Date(node.created_at);
+        html += '<div class="meta">Created: ' + created.toLocaleDateString() + ' ' + created.toLocaleTimeString() + '</div>';
+      }
+      html += textPreview;
+      html += tags;
+
+      if (!isChild && node.children && node.children.length) {
+        // Recurse into children.
+        html += '<ul>' + node.children.map(function(child){ return renderCard(child, true); }).join('') + '</ul>';
+      } else if (!isChild) {
+        // No children — show a hint.
+        html += '<div class="meta" style="font-style:italic;">No child cards</div>';
+      }
+
+      html += '</div></li>';
+      return html;
+    }
+
+    function renderTree(treeData) {
+      if (!treeData || !treeData.length) {
+        treeRoot.innerHTML = '<p style="color:var(--muted);">No cards found in the board.</p>';
+        return;
+      }
+
+      var html = '';
+      treeData.forEach(function(frame) {
+        html += '<div class="frame-section">';
+        html += '<h2 class="frame-title">' + escapeHtml(frame.frame_title) + '</h2>';
+        if (frame.parents && frame.parents.length) {
+          html += '<ul>' + frame.parents.map(function(parent){ return renderCard(parent, false); }).join('') + '</ul>';
+        } else {
+          html += '<p style="color:var(--muted);font-style:italic;">No parent cards in this frame.</p>';
+        }
+        html += '</div>';
+      });
+
+      treeRoot.innerHTML = html;
+    }
+
+    function toggleChildren(el) {
+      var icon = el.querySelector('.toggle-icon');
+      var ul = el.nextElementSibling;
+      if (!ul || !ul.tagName || ul.tagName.toLowerCase() !== 'ul') return;
+
+      var isHidden = ul.style.display === 'none';
+      ul.style.display = isHidden ? '' : 'none';
+      icon.classList.toggle('expanded', isHidden);
+    }
+
+    function expandAll() {
+      document.querySelectorAll('.tree > ul, .tree ul ul').forEach(function(ul){
+        ul.style.display = '';
+      });
+      document.querySelectorAll('.toggle-icon').forEach(function(icon){
+        icon.classList.add('expanded');
+      });
+    }
+
+    function collapseAll() {
+      document.querySelectorAll('.tree > ul, .tree ul ul').forEach(function(ul){
+        ul.style.display = 'none';
+      });
+      document.querySelectorAll('.toggle-icon').forEach(function(icon){
+        icon.classList.remove('expanded');
+      });
+    }
+
+    // Fetch tree data and render.
+    fetch('/api/frames/tree')
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        loadingEl.style.display = 'none';
+        controlsEl.hidden = false;
+        // Expand all by default.
+        expandAll();
+        renderTree(data);
+      })
+      .catch(function(err) {
+        loadingEl.style.display = 'none';
+        errorEl.style.display = 'block';
+        errorEl.textContent = 'Failed to load tree: ' + err.message;
+      });
+  </script>
+</body>
+</html>

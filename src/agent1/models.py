@@ -30,6 +30,7 @@ class Card:
     title: str
     text: str
     frame_id: str
+    parent_id: str = ""  # Optional reference to another card's id for tree hierarchy.
     tags: List[str] = field(default_factory=list)
     system: str = ""
     # ISO 8601 UTC timestamps. Empty string means "unknown" (cards created
@@ -46,6 +47,7 @@ class Card:
             "title": self.title,
             "text": self.text,
             "frame_id": self.frame_id,
+            "parent_id": self.parent_id,
             "tags": self.tags,
             "system": self.system,
             "created_at": self.created_at,

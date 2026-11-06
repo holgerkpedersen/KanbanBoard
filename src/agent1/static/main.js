@@ -1,7 +1,15 @@
 "use strict";
 
 // ---- API client -----------------------------------------------------------
-const CSRF = { "X-Requested-With": "XMLHttpRequest" };
+const CSRF = {
+  "X-Requested-With": "XMLHttpRequest",
+};
+
+// Read CSRF token from meta tag (injected by Flask template)
+(function () {
+  const el = document.querySelector('meta[name="csrf-token"]');
+  if (el) CSRF["X-CSRF-Token"] = el.getAttribute("content");
+})();
 
 async function api(method, path, body) {
   const opts = { method, headers: { ...CSRF } };
@@ -201,6 +209,12 @@ const sfx = (() => {
 
 // ---- DOM helpers (XSS-safe: only textContent / createElement) -------------
 const $ = (sel, root = document) => root.querySelector(sel);
+
+function escHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str || "";
+  return d.innerHTML;
+}
 const board = $("#board");
 const frameTpl = $("#frame-template");
 const cardTpl = $("#card-template");
@@ -447,6 +461,23 @@ function openCardModal(frameId, card) {
   $("#card-text").value = card ? card.text || "" : "";
   $("#card-tags").value = card ? (card.tags || []).join(", ") : "";
   $("#card-system").value = card ? card.system || "" : "";
+
+  // Populate the parent-card dropdown with every card on the board.
+  const parentSelect = $("#card-parent");
+  if (parentSelect) {
+    const currentParentId = card && card.parent_id ? card.parent_id : "";
+    let optionsHtml = '<option value="">— None —</option>';
+    state.frames.forEach((f) => {
+      f.cards.forEach((c) => {
+        // Don't list the card itself as its own parent.
+        if (card && c.id === card.id) return;
+        const selected = c.id === currentParentId ? ' selected' : '';
+        optionsHtml += `<option value="${c.id}"${selected}>${escHtml(c.title)}</option>`;
+      });
+    });
+    parentSelect.innerHTML = optionsHtml;
+  }
+
   // Existing cards show their read-only ID, so it can be copied without
   // leaving the editor. New cards have no ID yet, so the field stays hidden.
   const idField = $("#card-id-field");
@@ -506,6 +537,8 @@ cardForm.addEventListener("submit", async (e) => {
     .map((t) => t.trim())
     .filter(Boolean);
   const system = $("#card-system").value.trim();
+  // Read parent_id from the dropdown; empty string means no parent.
+  const parentId = ($("#card-parent").value || "").trim() || "";
   if (!title) return;
 
   try {
@@ -515,6 +548,7 @@ cardForm.addEventListener("submit", async (e) => {
         text,
         tags,
         system,
+        parent_id: parentId,
       });
       Object.assign(editing.card, updated);
     } else {
@@ -523,6 +557,7 @@ cardForm.addEventListener("submit", async (e) => {
         text,
         tags,
         system,
+        parent_id: parentId,
       });
       const frame = state.frames.find((f) => f.id === editing.frameId);
       frame.cards.push(created);
@@ -916,7 +951,7 @@ function renderBoardList(catalog, activeId, currentPath) {
   catalog.forEach((b) => {
     const opt = document.createElement("option");
     opt.value = b.id;
-    opt.textContent = b.name + "  —  " + b.source_path;
+    opt.textContent = b.name;
     if (b.id === activeId) opt.selected = true;
     boardSelectEl.appendChild(opt);
   });

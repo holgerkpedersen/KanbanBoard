@@ -17,7 +17,6 @@ from .security import (
     validate_card_title,
     validate_card_text,
     validate_card_system,
-    has_csrf_header,
     apply_security_headers,
 )
 
@@ -66,8 +65,6 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("", methods=["POST"])
     def create_card() -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         data: Dict[str, Any] = request.get_json(silent=True) or {}
         frame_id = data.get("frame_id")
         if not isinstance(frame_id, str):
@@ -86,12 +83,16 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             return jsonify({"error": str(exc)}), 400
         raw_tags = data.get("tags", [])
         tags = [str(t) for t in raw_tags] if isinstance(raw_tags, list) else []
+        parent_id = data.get("parent_id", "")
+        if not isinstance(parent_id, str):
+            parent_id = ""
         created = now_iso()
         card = Card(
             id=uuid.uuid4().hex,
             title=title,
             text=text,
             frame_id=frame_id,
+            parent_id=parent_id,
             tags=tags,
             system=system,
             created_at=created,
@@ -145,8 +146,6 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/<card_id>", methods=["PUT"])
     def update_card_endpoint(card_id: str) -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         store = current_store()
         card = store.get_card(card_id)
         if card is None:
@@ -182,6 +181,12 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
             if store.get_frame(fid) is None:
                 return jsonify({"error": "frame not found"}), 404
             card.frame_id = fid
+        if "parent_id" in data:
+            pid = str(data["parent_id"])
+            # Validate that the parent exists (empty string means no parent).
+            if pid and store.get_card(pid) is None:
+                return jsonify({"error": f"parent not found: {pid}"}), 404
+            card.parent_id = pid
         # Any accepted update refreshes the card's updated_at timestamp.
         card.updated_at = now_iso()
         store.update_card(card)
@@ -200,8 +205,6 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/<card_id>", methods=["DELETE"])
     def delete_card_endpoint(card_id: str) -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         if current_store().get_card(card_id) is None:
             return jsonify({"error": "not found"}), 404
         store = current_store()
@@ -224,8 +227,6 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
 
     @bp.route("/<card_id>/move", methods=["POST"])
     def move_card(card_id: str) -> Response:
-        if not has_csrf_header(request):
-            return jsonify({"error": "csrf"}), 403
         store = current_store()
         card = store.get_card(card_id)
         if card is None:
