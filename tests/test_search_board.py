@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.agent1 import create_app
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "agent1" / "static"
 
@@ -23,6 +24,7 @@ STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "agent1" / "static"
 def _index_body() -> str:
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     resp = app.test_client().get("/")
     assert resp.status_code == 200
     return resp.data.decode("utf-8")
@@ -48,6 +50,7 @@ def test_search_placeholder_mentions_system():
 def test_search_helper_is_served_and_defines_matches_query():
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     resp = app.test_client().get("/static/search.js")
     assert resp.status_code == 200
     source = resp.data.decode("utf-8")
@@ -59,11 +62,12 @@ def test_board_payload_exposes_system_for_client_search():
     """The client can only search a property the API actually sends."""
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     c = app.test_client()
     frame = c.post(
         "/api/frames",
         json={"title": "Backlog"},
-        headers={"X-Requested-With": "XMLHttpRequest"},
+        headers={"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER},
     ).get_json()
     card = c.post(
         "/api/cards",
@@ -74,7 +78,7 @@ def test_board_payload_exposes_system_for_client_search():
             "tags": [],
             "system": "Billing Service",
         },
-        headers={"X-Requested-With": "XMLHttpRequest"},
+        headers={"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER},
     ).get_json()
     assert card["system"] == "Billing Service"
 

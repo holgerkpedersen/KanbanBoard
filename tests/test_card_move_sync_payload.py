@@ -24,7 +24,9 @@ import pytest
 
 from src.agent1 import create_app, kanban_sync as ks
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 
 class _NullProcessor:
@@ -58,6 +60,7 @@ def synced(tmp_path, monkeypatch):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     # These tests exercise the sync *payload shape*, not the per-board gate.
     # Opt the live board into agent1 sync so outbound enqueues are unblocked;
     # the gate itself is pinned in test_board_sync_gate.py.  The holder's store
@@ -171,6 +174,7 @@ def test_no_message_when_sync_disabled(tmp_path, monkeypatch):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     client = app.test_client()
 
     f1 = client.post("/api/frames", json={"title": "A"}, headers=CSRF).get_json()["id"]

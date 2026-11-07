@@ -5,12 +5,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.agent1 import create_app
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 
 def _client():
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     return app.test_client()
 
 
@@ -25,6 +28,7 @@ def _client_with_boards(tmp_path):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     app.config["UPLOADS_DIR"] = str(tmp_path / "uploads")
     return app.test_client()
 
@@ -321,6 +325,7 @@ def test_create_app_persists_active_id_across_restart(tmp_path):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     c = app.test_client()
     c.post("/api/boards/select", json={"catalog_id": "alpha"}, headers=CSRF)
     c.post("/api/frames", json={"title": "Default"}, headers=CSRF)
@@ -333,6 +338,7 @@ def test_create_app_persists_active_id_across_restart(tmp_path):
         registry_path=str(tmp_path / "active.json"),
     )
     app2.config["TESTING"] = True
+    app2.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     c2 = app2.test_client()
     titles = [fr["title"] for fr in c2.get("/api/frames").get_json()]
     assert titles == ["Default"]

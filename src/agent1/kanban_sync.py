@@ -503,13 +503,24 @@ def _apply_issue_resolve(msg: dict[str, Any], store: Any) -> bool:
     card_id, origin, mapped_card_id = _resolve_card_id_for_message(msg)
 
     if not card_id:
-        if source_id:
+        # A resolve for a source this board never created (no map entry, no
+        # target_ref, no kanban: location) has no card to act on and can never
+        # gain one by being retried. Resolve is an idempotent terminal op, so
+        # the late/repeated echo of an issue that was never a card here is a
+        # quiet no-op. A *mapped* card id landing in this branch means the
+        # mapping points at nothing, which is a real anomaly and stays loud.
+        if origin == "unmapped" and source_id:
             logger.info(
                 "issue_resolve: untracked source %s has no card; treating as quiet no-op",
                 source_id,
             )
             return True
-        logger.warning("issue_resolve: no matching card for source=%s", source_id)
+        logger.warning(
+            "%s: no matching card for source=%s, target=%s",
+            msg.get("op", ""),
+            source_id,
+            target_ref,
+        )
         return False
 
     card = store.get_card(card_id)
@@ -560,9 +571,13 @@ def _apply_issue_resolve(msg: dict[str, Any], store: Any) -> bool:
 def _process_single_message(msg: dict[str, Any], store: Any) -> bool:
     """Apply a single inbound message. Returns True on success."""
     op = msg.get("op", "")
-    payload = msg.get("payload", {})
-    if not isinstance(payload, dict):
-        payload = {}
+    # Malformed payloads are rejected at the dispatcher so they route to the
+    # dead-letter directory; _payload_of falls back to the envelope when the
+    # "payload" key is absent, so only a present non-dict value is rejected.
+    payload = msg.get("payload")
+    if payload is not None and not isinstance(payload, dict):
+        logger.warning("%s: malformed payload, ignoring: %r", op, payload)
+        return False
 
     if op == "issue_create":
         return _apply_issue_create(msg, store)

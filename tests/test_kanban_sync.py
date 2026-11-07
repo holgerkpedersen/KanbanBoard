@@ -206,10 +206,75 @@ def test_issue_resolve_honours_wontfix_disposition(store):
     assert "[status:wontfix]" in card.tags
 
 
-def test_issue_resolve_unknown_source_returns_false(store):
+def test_issue_resolve_unmapped_source_is_quiet_noop(store):
+    """A resolve for a source this board never created is a no-op, not a failure.
+
+    This test asserted ``is False`` before ``ab35f84`` introduced the quiet
+    no-op.  The queue contract settled on ``True`` in the same commit — see
+    ``test_process_single_message_dispatches_all_ops``, which asserts an
+    untracked resolve dispatches to ``True`` — so this is the test that was
+    left behind.  A *mapped* id pointing at a missing card still returns
+    False; see ``test_issue_resolve_stale_map_entry_returns_false``.
+    """
     assert ks._apply_issue_resolve(
         {"op": "issue_resolve", "source_id": "iss-missing", "payload": {}}, store
+    ) is True
+
+
+def test_issue_resolve_untracked_source_is_quiet_noop(store):
+    """A resolve for a source this board never created must not fail.
+
+    ``ab35f84`` added the quiet no-op, then keyed it on ``msg["op"]`` inside
+    ``_apply_issue_resolve`` — which is always ``"issue_resolve"`` there, so
+    the branch swallowed *every* unresolved resolve, including ones where the
+    id map points at a card that does not exist.  The no-op must be keyed on
+    the resolution *origin*: only a source with no mapping at all is an
+    untracked echo, and it can never gain a card by being retried.
+    """
+    assert ks._apply_issue_resolve(
+        {"op": "issue_resolve", "source_id": "iss-never-created", "payload": {}}, store
+    ) is True
+
+
+def test_issue_resolve_stale_map_entry_returns_false(store):
+    """A map entry pointing at a deleted card is an anomaly, not a no-op."""
+    ks.link_ids("iss-stale", "card-gone")
+    assert ks._apply_issue_resolve(
+        {"op": "issue_resolve", "source_id": "iss-stale", "payload": {}}, store
     ) is False
+
+
+def test_untracked_resolve_does_not_dead_letter_the_queue(store, tmp_path, monkeypatch):
+    """The quiet no-op must not churn the queue into dead letters.
+
+    ``process_inbound`` re-queues every message that returns False, and after
+    ``MAX_RETRIES`` dead-letters it.  An untracked resolve is permanent — it
+    can never succeed — so treating it as a failure filled ``dead_letters/``
+    with late echoes of issues that were never cards on this board.
+    """
+    monkeypatch.setattr(ks, "DEAD_LETTER_DIR", tmp_path / "dead-letter")
+    qdir = tmp_path / "queue-agent1-in"
+    qdir.mkdir()
+    (qdir / "messages.jsonl").write_text(
+        '{"seq": 1, "op": "issue_resolve", "source_id": "iss-never-created", '
+        '"payload": {"disposition": "resolved"}}\n',
+        encoding="utf-8",
+    )
+
+    # The no-op counts as applied, so the message is consumed and never
+    # re-queued.  Under the old False return this returned 0 and appended a
+    # retry line instead.
+    assert ks.process_inbound(store, qdir) == 1
+    lines = (qdir / "messages.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1, "no-op must not re-queue the message"
+
+    # Polling for MAX_RETRIES rounds must still produce no dead letter.
+    for _ in range(ks.MAX_RETRIES):
+        ks.process_inbound(store, qdir)
+
+    assert not list((tmp_path / "dead-letter").glob("seq_*.jsonl")), (
+        "untracked issue_resolve must be a no-op, not a retried failure"
+    )
 
 
 def test_resolve_uses_target_ref_directly(store):

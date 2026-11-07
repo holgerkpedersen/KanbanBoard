@@ -26,7 +26,9 @@ from src.agent1 import create_app
 from src.agent1 import kanban_sync as ks
 from src.agent1.store import BoardStore
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 
 def _client(tmp_path, *, select=True):
@@ -55,6 +57,7 @@ def _client(tmp_path, *, select=True):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     client = app.test_client()
     if select:
         r = client.post("/api/boards/select", json={"catalog_id": "demo"}, headers=CSRF)

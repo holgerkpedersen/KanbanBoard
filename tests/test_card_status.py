@@ -18,7 +18,9 @@ from src.agent1.store import BoardStore
 from src.agent1 import create_app
 
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 
 # ---- model-level tests ----------------------------------------------------
@@ -50,6 +52,7 @@ def test_card_to_dict_includes_status():
 def _client_with_frame():
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     c = app.test_client()
     # Create a frame for the test to use.
     r = c.post("/api/frames", json={"title": "To Do"}, headers=CSRF)
@@ -152,6 +155,7 @@ def test_status_in_sync_payload_on_move():
     """A card move enqueues a payload that includes ``status``."""
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     c = app.test_client()
 
     f1 = c.post("/api/frames", json={"title": "To Do"}, headers=CSRF).get_json()

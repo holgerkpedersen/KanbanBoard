@@ -156,7 +156,7 @@ def test_card_fields_stretch_to_the_panel_width():
     css = _css()
     assert re.search(
         r"\.card-modal-card label > input,\s*\.card-modal-card label > textarea"
-        r"\s*\{[^}]*width:\s*100%",
+        r"(,\s*\.card-modal-card label > select)?\s*\{[^}]*width:\s*100%",
         css,
         re.S,
     ), "card editor inputs/textarea must be width: 100% to match the panel"

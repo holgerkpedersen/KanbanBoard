@@ -16,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.agent1 import create_app
 from src.agent1.app import DEFAULT_WORKING_DIR
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REAL_DATA_DIR = REPO_ROOT / "data"
@@ -37,6 +39,7 @@ def _snapshot(root: Path) -> dict:
 def _bare_client():
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     return app, app.test_client()
 
 

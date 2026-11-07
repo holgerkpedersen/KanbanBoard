@@ -2,6 +2,31 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-03 — CSRF tokens on every API write, and a quiet resolve no-op
+
+- **Security: double-submit CSRF token.** Every mutating `/api/*` request
+  (POST / PUT / DELETE) now requires an `X-CSRF-Token` header that matches
+  the per-request token handed to the browser through the
+  `<meta name="csrf-token">` tag. Requests without a matching token are
+  rejected with 403, so a page on another origin can no longer mutate the
+  board state of a user who happens to have the app open. Under `TESTING`
+  the app uses a fixed token so test clients can send the header; the real
+  guard still runs in tests, and requests that omit it keep failing with 403.
+- **Tests.** New `tests/conftest.py` exports `TEST_CSRF_TOKEN` /
+  `TEST_CSRF_HEADER`, and every test module that issues a mutating request
+  merges the header in, so the suite exercises the guarded path rather than
+  bypassing it.
+- **Fix: untracked `issue_resolve` dead-lettered the queue.** The sync
+  resolved an inbound resolve to a card id via `_resolve_card_id_for_message`,
+  which reports where the id came from (`target_ref`, `map`, `locations` or
+  `unmapped`). A resolve whose source this board never created can never gain
+  a card by being retried, so it is now a quiet no-op keyed on that *origin*
+  and is consumed as applied. Keying it on the message op instead swallowed
+  every unresolved resolve, including a map entry pointing at a deleted card;
+  that case stays loud and returns False. `test_kanban_sync.py` pins both
+  branches plus the queue-level contract: an untracked resolve is applied once
+  and produces no dead letter.
+
 ## 2026-11-02 — The card editor grows with its description field
 
 - **Width follow.** Dragging the description field wider now widens the whole

@@ -31,7 +31,8 @@ def test_list_reads_display_name_from_seed(tmp_path):
     assert len(entries) == 1
     assert entries[0]["id"] == "alpha"
     assert entries[0]["name"] == "Plan Alpha"
-    assert entries[0]["source_path"].endswith("alpha.json")
+    # Catalog entries must not leak filesystem paths to callers.
+    assert "source_path" not in entries[0]
 
 
 def test_list_falls_back_to_id_when_no_name(tmp_path):

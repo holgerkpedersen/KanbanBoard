@@ -154,8 +154,15 @@ def create_app(
 
         # -- CSRF token generation ------------------------------------------
         # Always generate a fresh token; the frontend reads it from the HTML
-        # response and sends it back on every mutating request.
-        g.csrf_token = generate_csrf_token()
+        # response and sends it back on every mutating request.  Under
+        # TESTING a fixed token is used so non-browser clients (the Flask
+        # test client) can send a matching X-CSRF-Token header — the real
+        # double-submit check still runs, so requests without the header
+        # are rejected exactly as in production.
+        if app.config.get("TESTING"):
+            g.csrf_token = app.config.get("TEST_CSRF_TOKEN", generate_csrf_token())
+        else:
+            g.csrf_token = generate_csrf_token()
 
         # -- Centralised auth check for /api/* write endpoints ---------------
         if request.path.startswith("/api/"):

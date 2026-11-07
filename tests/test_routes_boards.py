@@ -19,7 +19,9 @@ import pytest
 from src.agent1 import create_app
 from src.agent1.store import BoardStore
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 
 def _client(tmp_path, *, working_dir=None, catalog_dir=None):
@@ -34,6 +36,7 @@ def _client(tmp_path, *, working_dir=None, catalog_dir=None):
         registry_path=str(tmp_path / "active.json"),
     )
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     return app.test_client(), app, wd, cd
 
 
@@ -83,7 +86,8 @@ def test_list_returns_catalog_with_display_names(tmp_path):
     catalog = {e["id"]: e for e in body["catalog"]}
     assert set(catalog) == {"alpha", "beta"}
     assert catalog["alpha"]["name"] == "Plan Alpha"
-    assert catalog["alpha"]["source_path"].endswith("alpha.json")
+    # The catalog entry must not leak filesystem paths to the client.
+    assert "source_path" not in catalog["alpha"]
 
 
 def test_list_returns_fallback_name_when_seed_has_none(tmp_path):
@@ -363,8 +367,13 @@ def test_upload_activate_selects_board(tmp_path):
     )
     assert r.status_code == 201, r.data
     body = r.get_json()
-    assert body["active"] is True
-    assert body["current_path"].endswith(f"board-{body['id']}.json")
+    # Uploads no longer auto-activate (hardening: a POST must not silently
+    # switch the live board). The user selects it explicitly afterwards.
+    assert body["active"] is False
+    listed = c.get("/api/boards").get_json()
+    assert listed["active"] != body["id"]
+    r = c.post("/api/boards/select", json={"catalog_id": body["id"]}, headers=CSRF)
+    assert r.status_code == 200
     # The frames endpoint now serves the uploaded board.
     board = c.get("/api/frames/board").get_json()
     assert len(board) == 3

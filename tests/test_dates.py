@@ -20,12 +20,15 @@ from src.agent1 import create_app
 from src.agent1.models import Card, Frame
 from src.agent1.store import BoardStore
 
-CSRF = {"X-Requested-With": "XMLHttpRequest"}
+from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
+
+CSRF = {"X-Requested-With": "XMLHttpRequest", **TEST_CSRF_HEADER}
 
 
 def _client():
     app = create_app()
     app.config["TESTING"] = True
+    app.config["TEST_CSRF_TOKEN"] = TEST_CSRF_TOKEN
     return app.test_client()
 
 
