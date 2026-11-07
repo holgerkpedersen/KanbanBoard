@@ -2,7 +2,26 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-04 — Integrated cards get a colour and a filter
+
+- **Integrated-card highlight.** A card linked to an Agent1 issue is now
+  marked on the board: a left border and background tint (`.card-integrated`)
+  plus a 🔗 badge, so it reads as "a card that belongs to the Agent1 system"
+  at a glance. The colour adapts per theme (light, dark, high-contrast).
+- **Filter.** The filter bar gains an "integrated" toggle chip. Turning it on
+  keeps only cards whose id appears in `/api/cards/linked`; off (the default)
+  is inactive and shows everything. It combines with search and the other
+  filters under AND, and switching boards resets it.
+- **API.** `GET /api/cards/linked` returns `{card_ids: [...]}` — the ids of
+  cards with a mapping in this board's id map. It is read-only, needs no CSRF
+  token, and reports an empty list when there is no id map.
+- **Tests.** New `tests/test_linked_cards.py` (endpoint shape, empty-map case,
+  no CSRF needed) and `tests/test_card_integrated_style.py` (CSS markers, badge
+  markup, theme coverage). The JS filter helper already covers the integrated
+  predicate in `tests/test_search_filter.js`.
+
 ## 2026-11-03 — CSRF tokens on every API write, and a quiet resolve no-op
+
 
 - **Security: double-submit CSRF token.** Every mutating `/api/*` request
   (POST / PUT / DELETE) now requires an `X-CSRF-Token` header that matches

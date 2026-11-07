@@ -24,6 +24,11 @@ disk** as JSON, so it survives restarts with no database.
   empty tag selection is inactive. A Clear button resets everything, and switching
   boards always starts unfiltered. Filtering is client-side only: hidden cards stay
   on the board untouched — no data changes.
+- **Integrated cards:** a card that is linked to an Agent1 issue renders with a
+  distinct accent colour and a 🔗 badge, and the "🔗 Integrated" toggle in the filter
+  bar narrows the view to exactly those cards (combined with the other filters).
+  Linkage is derived read-only from the shared `.card_id_map.json` — the feature
+  adds no queue messages and changes no board schema.
 - **Drag sounds:** subtle, fully synthesized (Web Audio) pick-up / move / frame-slide
   cues — no audio asset files. Sounds are **off by default**; click the 🔊/🔇 button in
   the top bar (or the first-run prompt) to enable, and your choice is remembered in
