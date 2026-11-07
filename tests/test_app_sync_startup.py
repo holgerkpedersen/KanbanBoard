@@ -17,7 +17,6 @@ startup must still yield a usable app.
 
 import importlib
 import logging
-import os
 import sys
 from pathlib import Path
 

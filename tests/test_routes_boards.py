@@ -14,10 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pytest
 
 from src.agent1 import create_app
-from src.agent1.store import BoardStore
 
 from conftest import TEST_CSRF_HEADER, TEST_CSRF_TOKEN
 

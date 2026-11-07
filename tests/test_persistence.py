@@ -4,7 +4,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pytest
 
 import src.agent1.store as store_mod
 from src.agent1.models import Card, Frame
