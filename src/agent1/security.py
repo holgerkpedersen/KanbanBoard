@@ -10,11 +10,13 @@ Provides:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import secrets
 from typing import Any, Dict, Optional
 
-from flask import Request, Response, g
+from flask import Flask, Request, Response, current_app, g
 
 
 # ---------------------------------------------------------------------------
@@ -124,36 +126,123 @@ def validate_card_system(system: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CSRF token protection (double-submit cookie pattern).
+# CSRF token protection (signed double-submit cookie pattern).
 
 # How it works
 # ------------
-# 1. On each request the ``before_request`` hook in *app.py* generates a
-#    cryptographically random token and stores it on :data:`g` as
-#    ``g.csrf_token``.  The value is also returned to the client inside the
-#    HTML response body (via a <meta> tag) so the frontend JavaScript can
-#    read it.
-# 2. Every write endpoint (POST / PUT / DELETE on /api/*) MUST include that
-#    token in an ``X-CSRF-Token`` request header whose value exactly matches
-#    the stored token.
-# 3. The centralized :func:`validate_csrf` helper is called from the
-#    ``before_request`` hook; individual route handlers no longer call
-#    ``has_csrf_header``.
+# 1. The server issues a **signed** token: ``payload.signature`` where the
+#    signature is HMAC-SHA256 over the payload with a server secret.  The
+#    ``before_request`` hook in *app.py* calls :func:`issue_csrf_token`, which
+#    reuses the cookie the browser already has (so the token survives page
+#    reloads and parallel tabs) or mints a new one.
+# 2. The token is handed to the client twice: inside the HTML body via the
+#    ``<meta name="csrf-token">`` tag, and as the ``kanban_csrf`` cookie.
+#    JavaScript reads the meta tag and sends the value back in the
+#    ``X-CSRF-Token`` request header on every write (POST / PUT / DELETE) to
+#    ``/api/*``.
+# 3. :func:`validate_csrf` requires the header to **match the cookie** (the
+#    double-submit property: a cross-origin attacker can make a request carry
+#    the cookie but cannot read it back, so it cannot reproduce the header)
+#    **and** the signature to verify with the server secret (so an attacker
+#    who sets ``kanban_csrf`` from a response header cannot forge a token that
+#    passes).  A per-request random token cannot work: the value embedded in a
+#    page belongs to the GET that rendered it, and would be gone by the time
+#    the browser makes its first write.
+# 4. The centralized :func:`validate_csrf` helper runs from ``require_auth``;
+#    individual route handlers do not call ``has_csrf_header``.
 # ---------------------------------------------------------------------------
 
+CSRF_COOKIE_NAME = "kanban_csrf"
+_CSRF_PAYLOAD_BYTES = 16  # 128 bits of entropy in the payload
+_CSRF_SIG_HEX_LEN = 32    # truncated HMAC-SHA256 (128 bits) is ample here
 
-def generate_csrf_token() -> str:
-    """Generate a cryptographically random CSRF token."""
-    return secrets.token_hex(32)  # 64 hex characters = 256 bits of entropy
+
+def _csrf_secret(app: Flask | None = None) -> bytes:
+    """Return the app's HMAC secret, minting and caching one on first use.
+
+    The secret lives in ``app.config`` only — it never reaches a cookie or a
+    template.  A value supplied via ``KANBAN_CSRF_SECRET`` survives restarts;
+    otherwise a random per-process secret is used, which simply invalidates
+    open pages when the service restarts (a page reload re-issues the token).
+    """
+    if app is not None:
+        cached = app.config.get("CSRF_SECRET")
+        if cached:
+            return cached.encode() if isinstance(cached, str) else cached
+
+    secret = os.environ.get("KANBAN_CSRF_SECRET", "")
+    if not secret:
+        secret = secrets.token_hex(32)
+    if app is not None:
+        app.config["CSRF_SECRET"] = secret
+    return secret.encode()
 
 
-def validate_csrf(request: Request) -> bool:
+def _csrf_signature(payload: str, secret: bytes) -> str:
+    """Truncated HMAC-SHA256 of *payload*, hex-encoded."""
+    digest = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+    return digest[:_CSRF_SIG_HEX_LEN]
+
+
+def generate_csrf_token(secret: bytes | None = None) -> str:
+    """Mint a signed CSRF token of the form ``<payload>.<signature>``."""
+    payload = secrets.token_hex(_CSRF_PAYLOAD_BYTES)
+    return f"{payload}.{_csrf_signature(payload, secret or _csrf_secret())}"
+
+
+def verify_csrf_token(token: str, secret: bytes | None = None) -> bool:
+    """Return ``True`` when *token* carries a signature made with *secret*.
+
+    Constant-time comparison, so the check leaks nothing about the secret.
+    """
+    if not token or "." not in token:
+        return False
+    payload, _, signature = token.partition(".")
+    expected = _csrf_signature(payload, secret or _csrf_secret())
+    return secrets.compare_digest(expected, signature)
+
+
+def is_secure_request(request: Request) -> bool:
+    """Return ``True`` when the request arrived over HTTPS.
+
+    The service normally terminates TLS upstream, so Flask sees plain HTTP and
+    ``request.is_secure`` is False; the proxy says otherwise via
+    ``X-Forwarded-Proto``.  Cookie flags depend on this: a ``Secure`` cookie on
+    a plain-HTTP localhost dev server is silently dropped by the browser.
+    """
+    if request.is_secure:
+        return True
+    forwarded = request.headers.get("X-Forwarded-Proto", "")
+    return forwarded.split(",")[0].strip().lower() == "https"
+
+
+def issue_csrf_token(request: Request, app: Flask | None = None) -> tuple[str, bool]:
+    """Return ``(token, issued_new)`` for the current request.
+
+    Reuses the cookie the client presented when its signature verifies; mints
+    a fresh token (and reports ``issued_new=True`` so the caller sets the
+    cookie) when there is no cookie, or when it was forged/tampered with.
+    """
+    secret = _csrf_secret(app)
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME, "")
+    if verify_csrf_token(cookie_token, secret):
+        return cookie_token, False
+    return generate_csrf_token(secret), True
+
+
+def validate_csrf(request: Request, app: Flask | None = None) -> bool:
     """Validate the double-submit CSRF token.
 
     Returns ``True`` when either (a) the request method is safe (GET, HEAD,
-    OPTIONS) or (b) both ``X-CSRF-Token`` header and stored token match.
-    Sets ``g.csrf_error`` to a human-readable message on failure so the
-    caller can return an appropriate response without leaking internals.
+    OPTIONS), (b) the request carries a valid API key (checked by the caller,
+    :func:`require_auth`), or (c) the ``X-CSRF-Token`` header matches the
+    ``kanban_csrf`` cookie **and** the token's signature verifies.
+
+    Under ``TESTING`` the fixed ``g.csrf_token`` is accepted, so the suite can
+    exercise the real code path without a cookie jar.
+
+    Sets ``g.csrf_error`` to a human-readable message on failure so the caller
+    can return an appropriate response without leaking internals.
 
     This replaces the old ``has_csrf_header()`` which only checked for the
     spoofable ``X-Requested-With: XMLHttpRequest`` header.
@@ -162,15 +251,37 @@ def validate_csrf(request: Request) -> bool:
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return True
 
-    token = getattr(g, "csrf_token", None)
     header_token = request.headers.get("X-CSRF-Token")
-
-    if not token or not header_token:
+    if not header_token:
         g.csrf_error = "CSRF token missing"
         return False
 
-    # Constant-time comparison to prevent timing side-channels.
-    return secrets.compare_digest(token, header_token)
+    # Test shortcut: a fixed token configured by the suite (see create_app).
+    fixed = getattr(g, "csrf_test_token", None)
+    if fixed and secrets.compare_digest(fixed, header_token):
+        return True
+
+    secret = _csrf_secret(app)
+
+    # Double-submit: the header must equal the cookie.  A cross-origin page
+    # can force the browser to send the cookie, but cannot read it, so it
+    # cannot put the same value in a header.
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME, "")
+    if not cookie_token:
+        g.csrf_error = "CSRF token missing"
+        return False
+    if not secrets.compare_digest(cookie_token, header_token):
+        g.csrf_error = "CSRF validation failed"
+        return False
+
+    # Signature: proves the pair was issued by this server.  Without it, any
+    # response that echoes a value in a Set-Cookie would let an attacker
+    # manufacture a matching (cookie, header) pair.
+    if not verify_csrf_token(header_token, secret):
+        g.csrf_error = "CSRF validation failed"
+        return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +364,9 @@ def require_auth(request: Request) -> Optional[Dict[str, Any]]:
         g.csrf_error = "unauthorized"
         return {"error": "unauthorized"}
 
-    # CSRF path (when no API key is configured).
-    if not validate_csrf(request):
+    # CSRF path (when no API key is configured).  Pass the app so validation
+    # can reach the HMAC secret stored in its config.
+    if not validate_csrf(request, current_app):
         error_msg = getattr(g, "csrf_error", "CSRF validation failed")
         return {"error": error_msg}
 

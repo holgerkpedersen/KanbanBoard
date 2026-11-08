@@ -33,7 +33,14 @@ from .board_catalog import BoardCatalog
 from .routes_frames import create_frame_blueprint
 from .routes_cards import create_card_blueprint
 from .routes_boards import create_boards_blueprint
-from .security import apply_security_headers, generate_csrf_token, require_auth
+from .security import (
+    CSRF_COOKIE_NAME,
+    apply_security_headers,
+    generate_csrf_token,
+    is_secure_request,
+    issue_csrf_token,
+    require_auth,
+)
 
 # Default on-disk locations for the *production* app. The module-level
 # ``app`` below passes these explicitly. Tests call create_app() with no
@@ -152,17 +159,28 @@ def create_app(
                 holder["path"] = None
         g.board_store = store
 
-        # -- CSRF token generation ------------------------------------------
-        # Always generate a fresh token; the frontend reads it from the HTML
-        # response and sends it back on every mutating request.  Under
-        # TESTING a fixed token is used so non-browser clients (the Flask
-        # test client) can send a matching X-CSRF-Token header — the real
-        # double-submit check still runs, so requests without the header
-        # are rejected exactly as in production.
+        # -- CSRF token issuance --------------------------------------------
+        # Signed double-submit: reuse the client's cookie when it verifies,
+        # otherwise mint a token and set the cookie on the way out.  The token
+        # is exposed to the page through ``g.csrf_token`` (the <meta> tag) and
+        # must come back in ``X-CSRF-Token`` on every write.  Minting a fresh
+        # random value per request — as this hook used to do — made every
+        # browser write fail with 403: the token in the page belonged to the
+        # GET that rendered it, so the next POST could never match.
+        # Under TESTING a fixed token is used so non-browser clients (the
+        # Flask test client) can send a matching X-CSRF-Token header; the real
+        # double-submit check still runs, so requests without the header are
+        # rejected exactly as in production.
         if app.config.get("TESTING"):
-            g.csrf_token = app.config.get("TEST_CSRF_TOKEN", generate_csrf_token())
+            fixed = app.config.get("TEST_CSRF_TOKEN") or generate_csrf_token()
+            g.csrf_token = fixed
+            g.csrf_test_token = fixed
+            g.csrf_issued_new = False
         else:
-            g.csrf_token = generate_csrf_token()
+            token, issued_new = issue_csrf_token(request, app)
+            g.csrf_token = token
+            g.csrf_test_token = None
+            g.csrf_issued_new = issued_new
 
         # -- Centralised auth check for /api/* write endpoints ---------------
         if request.path.startswith("/api/"):
@@ -248,6 +266,17 @@ def create_app(
 
     @app.after_request
     def _secure(response: Response) -> Response:
+        # Issue the CSRF cookie when this request minted a fresh token, so the
+        # browser's cookie jar and the <meta> tag carry the same value.
+        if getattr(g, "csrf_issued_new", False):
+            response.set_cookie(
+                CSRF_COOKIE_NAME,
+                g.csrf_token,
+                httponly=False,  # JS must read the meta tag twin, not this
+                samesite="Lax",
+                secure=is_secure_request(request),
+                path="/",
+            )
         # Static assets (JS/CSS) carry no inline script, so they need no nonce.
         if "Content-Security-Policy" not in response.headers:
             return apply_security_headers(response)
