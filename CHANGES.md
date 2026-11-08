@@ -2,6 +2,28 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-05 — Security: CSRF tokens now expire
+
+- **Gap.** Tokens minted by the 2026-11-05 fix were immortal. The payload was
+  pure randomness, so a token that once verified kept verifying forever: a
+  stolen `kanban_csrf` cookie stayed usable indefinitely.
+- **Fix: signed expiry inside the payload.** The payload is now
+  `<entropy><issue-time><lifetime>`, all hex (32 + 16 + 8 chars), and all of
+  it sits inside the HMAC region — so neither the issue time nor the lifetime
+  can be stretched without breaking the signature, and expiry needs no
+  server-side state. `csrf_token_is_current` refuses a token past its window;
+  `issue_csrf_token` rotates one out on the next page load. The lifetime is
+  baked in per token (read from `KANBAN_CSRF_MAX_AGE`, default 12 hours)
+  rather than looked up at validation time, so changing the setting cannot
+  reject a page's own still-valid token. Legacy tokens with no readable issue
+  time count as expired and get rotated. No API changes; no frontend changes.
+- **Tests.** New `tests/test_csrf_token_expiry.py` (13 tests) covers age
+  reading, refusal of an old-but-correctly-signed token, tampering with the
+  timestamp, legacy-token rotation, safe fallback for a malformed
+  `KANBAN_CSRF_MAX_AGE`, and the production path end-to-end (`TESTING=False`):
+  a stale token is refused with `"CSRF token expired"`, a fresh one still
+  writes. Full suite is 212 passed.
+
 ## 2026-11-05 — Fix: every browser write was rejected with 403
 
 - **Bug.** The CSRF guard shipped on 2026-11-03 broke the board in a real

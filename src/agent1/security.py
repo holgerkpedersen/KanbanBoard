@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
 from typing import Any, Dict, Optional
 
 from flask import Flask, Request, Response, current_app, g
@@ -153,8 +154,33 @@ def validate_card_system(system: str) -> str:
 # ---------------------------------------------------------------------------
 
 CSRF_COOKIE_NAME = "kanban_csrf"
-_CSRF_PAYLOAD_BYTES = 16  # 128 bits of entropy in the payload
+_CSRF_ENTROPY_BYTES = 16  # 128 bits of entropy in the payload
 _CSRF_SIG_HEX_LEN = 32    # truncated HMAC-SHA256 (128 bits) is ample here
+
+#: How long a minted token stays valid, in seconds.  A token carries its own
+#: issue time inside the signed payload, so expiry needs no server-side state:
+#: past this window the signature still verifies but the token is refused and
+#: a fresh one is issued on the next page load.  Overriding via
+#: ``KANBAN_CSRF_MAX_AGE`` lets an operator trade re-issue frequency against
+#: exposure of a stolen token.
+_DEFAULT_CSRF_MAX_AGE = 12 * 3600  # 12 hours — a working day and a half
+
+
+def get_csrf_max_age() -> int:
+    """Return the token lifetime in seconds (env override, default 12 hours).
+
+    A malformed or non-positive ``KANBAN_CSRF_MAX_AGE`` falls back to the
+    default rather than disabling expiry: an unset/typo'd value must not
+    silently restore the old never-expires behaviour.
+    """
+    raw = os.environ.get("KANBAN_CSRF_MAX_AGE", "").strip()
+    if not raw:
+        return _DEFAULT_CSRF_MAX_AGE
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_CSRF_MAX_AGE
+    return value if value > 0 else _DEFAULT_CSRF_MAX_AGE
 
 
 def _csrf_secret(app: Flask | None = None) -> bytes:
@@ -184,9 +210,24 @@ def _csrf_signature(payload: str, secret: bytes) -> str:
     return digest[:_CSRF_SIG_HEX_LEN]
 
 
-def generate_csrf_token(secret: bytes | None = None) -> str:
-    """Mint a signed CSRF token of the form ``<payload>.<signature>``."""
-    payload = secrets.token_hex(_CSRF_PAYLOAD_BYTES)
+def generate_csrf_token(secret: bytes | None = None, max_age: int | None = None) -> str:
+    """Mint a signed CSRF token of the form ``<payload>.<signature>``.
+
+    The payload is ``<entropy><issue-time><lifetime>``, all hex: 32 chars of
+    random entropy, a 16-char big-endian issue timestamp in seconds, and a
+    8-char lifetime in seconds.  All three fields sit inside the signed region,
+    so expiry is enforceable with no server-side state and neither the issue
+    time nor the lifetime can be stretched without breaking the signature.
+
+    The lifetime is baked in per token (rather than read from the environment
+    at validation time) so that changing ``KANBAN_CSRF_MAX_AGE`` mid-flight
+    cannot invalidate tokens that were minted under a longer window — a
+    short-lived test override must not reject a page's own valid token.
+    """
+    entropy = secrets.token_hex(_CSRF_ENTROPY_BYTES)
+    issued_at = int(time.time())
+    lifetime = max_age if max_age is not None else get_csrf_max_age()
+    payload = f"{entropy}{issued_at:016x}{lifetime:08x}"
     return f"{payload}.{_csrf_signature(payload, secret or _csrf_secret())}"
 
 
@@ -194,12 +235,63 @@ def verify_csrf_token(token: str, secret: bytes | None = None) -> bool:
     """Return ``True`` when *token* carries a signature made with *secret*.
 
     Constant-time comparison, so the check leaks nothing about the secret.
+    Signature only — expiry is checked by :func:`csrf_token_is_current`.
     """
     if not token or "." not in token:
         return False
     payload, _, signature = token.partition(".")
     expected = _csrf_signature(payload, secret or _csrf_secret())
     return secrets.compare_digest(expected, signature)
+
+
+def csrf_token_age(token: str) -> Optional[int]:
+    """Return the token's age in seconds, or ``None`` if it carries no issue time.
+
+    Legacy tokens (minted before the payload carried a timestamp) have no
+    readable issue time and return ``None``; callers treat that as expired so
+    old never-expiring tokens are rotated out rather than accepted forever.
+    """
+    parsed = _parse_csrf_payload(token)
+    if parsed is None:
+        return None
+    _entropy, issued_at, _lifetime = parsed
+    return max(0, int(time.time()) - issued_at)
+
+
+def csrf_token_is_current(token: str, max_age: int | None = None) -> bool:
+    """Return ``True`` when *token* is signed-and-issued within its lifetime.
+
+    Expiry is deliberately a separate check from the signature so that
+    :func:*`verify_csrf_token` keeps its single meaning (authenticity).  The
+    window defaults to the token's own embedded lifetime; pass ``max_age`` to
+    override it (used by tests).  A token with no readable issue time counts as
+    expired: it predates expiry support and must not be immortal.
+    """
+    parsed = _parse_csrf_payload(token)
+    if parsed is None:
+        return False
+    _entropy, issued_at, lifetime = parsed
+    age = max(0, int(time.time()) - issued_at)
+    return age <= (max_age if max_age is not None else lifetime)
+
+
+def _parse_csrf_payload(token: str):
+    """Split a token payload into ``(entropy, issued_at, lifetime)``.
+
+    Returns ``None`` when the payload is not the current 56-hex-char shape
+    (32 entropy + 16 timestamp + 8 lifetime), which covers legacy tokens.
+    """
+    if not token or "." not in token:
+        return None
+    payload = token.partition(".")[0]
+    if len(payload) != 56:
+        return None
+    try:
+        issued_at = int(payload[32:48], 16)
+        lifetime = int(payload[48:], 16)
+    except ValueError:
+        return None
+    return payload[:32], issued_at, lifetime
 
 
 def is_secure_request(request: Request) -> bool:
@@ -219,13 +311,14 @@ def is_secure_request(request: Request) -> bool:
 def issue_csrf_token(request: Request, app: Flask | None = None) -> tuple[str, bool]:
     """Return ``(token, issued_new)`` for the current request.
 
-    Reuses the cookie the client presented when its signature verifies; mints
-    a fresh token (and reports ``issued_new=True`` so the caller sets the
-    cookie) when there is no cookie, or when it was forged/tampered with.
+    Reuses the cookie the client presented when its signature verifies **and**
+    it has not expired; mints a fresh token (and reports ``issued_new=True`` so
+    the caller sets the cookie) when there is no cookie, when it was
+    forged/tampered with, or when it aged past ``KANBAN_CSRF_MAX_AGE``.
     """
     secret = _csrf_secret(app)
     cookie_token = request.cookies.get(CSRF_COOKIE_NAME, "")
-    if verify_csrf_token(cookie_token, secret):
+    if verify_csrf_token(cookie_token, secret) and csrf_token_is_current(cookie_token):
         return cookie_token, False
     return generate_csrf_token(secret), True
 
@@ -279,6 +372,13 @@ def validate_csrf(request: Request, app: Flask | None = None) -> bool:
     # manufacture a matching (cookie, header) pair.
     if not verify_csrf_token(header_token, secret):
         g.csrf_error = "CSRF validation failed"
+        return False
+
+    # Expiry: the issue time is inside the signed payload, so a stolen token
+    # stops working once it ages past the window.  A valid-signature-but-stale
+    # token gets its own message so the client can prompt a reload.
+    if not csrf_token_is_current(header_token):
+        g.csrf_error = "CSRF token expired"
         return False
 
     return True
