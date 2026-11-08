@@ -2,6 +2,33 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-05 — Fix: every browser write was rejected with 403
+
+- **Bug.** The CSRF guard shipped on 2026-11-03 broke the board in a real
+  browser. `before_request` minted a fresh random token on *every* request,
+  and validation compared the `X-CSRF-Token` header against that per-request
+  value. A page carries the token from the GET that rendered it, so by the
+  time the browser posted, the server expected a different number: every
+  create/update/delete returned `403 {"error":"CSRF validation failed"}`.
+  The suite never saw it — under `TESTING` a fixed token is configured, and
+  no test built the app the way production does.
+- **Fix: signed double-submit cookie.** The token is now
+  `<payload>.<HMAC-SHA256(payload)>`, keyed by a server secret
+  (`KANBAN_CSRF_SECRET`, or a random per-process secret). `issue_csrf_token`
+  reuses the client's `kanban_csrf` cookie when its signature verifies and
+  mints a new one otherwise, so the value is stable across reloads and tabs.
+  Validation requires the header to match the cookie (the double-submit
+  property) *and* the signature to verify, so an attacker who can set the
+  cookie from outside cannot forge a passing pair. The cookie is written with
+  `SameSite=Lax`, path `/`, and `Secure` when TLS is terminated upstream
+  (`X-Forwarded-Proto`). No API changes; no frontend changes.
+- **Tests.** New `tests/test_csrf_production_flow.py` builds the app with
+  `TESTING` left off — the production path. It proves the page token is
+  accepted, that a missing and a forged token are rejected, that the token
+  survives consecutive writes, and that it is stable across requests. The
+  three behavioural tests fail on the old code and pass on the new; the full
+  suite is 199 passed.
+
 ## 2026-11-04 — Integrated cards get a colour and a filter
 
 - **Integrated-card highlight.** A card linked to an Agent1 issue is now
