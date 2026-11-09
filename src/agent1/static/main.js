@@ -593,15 +593,18 @@ function wireCardDrag(node) {
 // DOM count would point at the wrong server position; hidden cards that
 // sit before the drop gap must be counted too. The dragged card itself is
 // excluded - the server removes it from its old position before inserting.
+// Hidden cards AFTER the gap are never counted: the walk stops as soon as
+// the gap position is reached, so a hidden card sitting beyond the dragged
+// card (e.g. between it and the gap in list order) must not inflate the
+// index.
 function visibleCountToRealIndex(allCards, draggedId) {
   return function (visibleCount) {
     let real = 0;
     for (const card of allCards) {
+      if (visibleCount === 0 && cardVisible(card)) break; // gap sits before this card
       if (card.id === draggedId) continue;
-      const isVisible = cardVisible(card);
-      if (visibleCount === 0 && isVisible) break; // gap sits before this card
       real++;
-      if (isVisible) visibleCount--;
+      if (cardVisible(card)) visibleCount--;
     }
     return real;
   };

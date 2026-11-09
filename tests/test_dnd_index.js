@@ -5,6 +5,7 @@
  */
 const assert = require("assert");
 const { computeInsertIndex, cardAfterPoint } = require("../src/agent1/static/dnd.js");
+const CardSearch = require("../src/agent1/static/search.js");
 
 // Build a fake box containing given child specs:
 //   { cls: "card" | "placeholder" | "empty-hint", dragging: bool }
@@ -125,6 +126,51 @@ const mapVisibleToReal = (allIds, draggedId) => (visibleCount) => {
     const box = makeBox([{ cls: "card" }, { cls: "card" }, { cls: "placeholder" }]);
     assert.strictEqual(computeInsertIndex(box, box.children[2], mapper), 3);
   }
+}
+
+// --- real tag filter (CardSearch.filterCard, the production predicate) -----
+// Regression for the reported bug: "the card can be moved even with the
+// kanban tag filter" active. Cards [A,B,C,D] live in one frame; B and C
+// carry the 'kanban' tag, the user filters to that tag, so only B and C
+// are visible. Dragging C to the gap after B (visibleCount=1) must insert
+// at the REAL index: A and B precede the drop point -> index 2. A naive
+// DOM count would send 1 and the card would land in the wrong server slot.
+{
+  const cards = [
+    { id: "A", title: "a", text: "", tags: [] },
+    { id: "B", title: "b", text: "", tags: ["kanban"] },
+    { id: "C", title: "c", text: "", tags: ["kanban"] },
+    { id: "D", title: "d", text: "", tags: [] },
+  ];
+  const filters = { tags: ["kanban"], from: null, to: null };
+  const isVisible = (card) => CardSearch.filterCard(card, "", filters, null);
+  assert.ok(isVisible(cards[1]) && isVisible(cards[2]));
+  assert.ok(!isVisible(cards[0]) && !isVisible(cards[3]));
+
+  // Same algorithm as main.js visibleCountToRealIndex, over real cards.
+  const mapper = (visibleCount) => {
+    let real = 0;
+    for (const card of cards) {
+      if (visibleCount === 0 && isVisible(card)) break; // gap sits before this card
+      if (card.id === "C") continue; // dragged card excluded
+      real++;
+      if (isVisible(card)) visibleCount--;
+    }
+    return real;
+  };
+  // gap before first visible card (B) -> real index 1 (A precedes)
+  assert.strictEqual(mapper(0), 1);
+  // gap after B (one visible card above) -> real index 2 (A, B precede)
+  assert.strictEqual(mapper(1), 2);
+  // gap at the very bottom of the filtered column -> real index 3:
+  // the server removes the dragged card from its old slot before
+  // inserting, and C's old slot (2) sits above the gap, so everything
+  // below shifts up by one.
+  assert.strictEqual(mapper(2), 3);
+
+  // Wire it through computeInsertIndex: placeholder after visible card B.
+  const box = makeBox([{ cls: "card" }, { cls: "placeholder" }]);
+  assert.strictEqual(computeInsertIndex(box, box.children[1], mapper), 2);
 }
 
 // --- drop-zone semantics ----------------------------------------------------

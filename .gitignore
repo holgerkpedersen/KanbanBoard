@@ -6,5 +6,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .pytest-tmp/
+.pytest_tmp/
+.testmondata
 .venv/
 venv/
