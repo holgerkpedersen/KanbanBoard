@@ -47,8 +47,14 @@
    *
    * Using the DOM position (not a server-order index derived from a sibling
    * card id) makes same-frame reordering exact and avoids off-by-one errors.
+   *
+   * `mapDomIndexToReal` (optional): when the board is filtered, hidden
+   * cards are not rendered, so a DOM count indexes only the *visible*
+   * cards while the server orders over ALL cards. The caller passes a
+   * function mapping a visible-card count to the real index in the frame's
+   * full card list; without it, filtered drops land at the wrong position.
    */
-  function computeInsertIndex(box, placeholder) {
+  function computeInsertIndex(box, placeholder, mapDomIndexToReal) {
     let count = 0;
     const children = box.children;
     for (let i = 0; i < children.length; i++) {
@@ -62,7 +68,9 @@
         count++;
       }
     }
-    return count;
+    return typeof mapDomIndexToReal === "function"
+      ? mapDomIndexToReal(count)
+      : count;
   }
 
   return { cardAfterPoint, computeInsertIndex };

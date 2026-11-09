@@ -90,6 +90,43 @@ assert.strictEqual(
   assert.strictEqual(cardAfterPoint(box, 25), null);
 }
 
+// --- filtered boards --------------------------------------------------------
+// With a filter active, hidden cards are not rendered, so the DOM count is
+// a count of VISIBLE cards. computeInsertIndex's mapper translates it into
+// the frame's real (all-cards) index. These mirror the scenario:
+//   all cards  = [A, B, C, D]  with B hidden by the tag filter
+//   visible    = [A, C, D]
+const mapVisibleToReal = (allIds, draggedId) => (visibleCount) => {
+  // Same algorithm as main.js visibleCountToRealIndex, over ids.
+  let real = 0;
+  for (const id of allIds) {
+    if (id === draggedId) continue;
+    const isVisible = id !== "B"; // B is the hidden card
+    if (visibleCount === 0 && isVisible) break; // gap sits before this card
+    real++;
+    if (isVisible) visibleCount--;
+  }
+  return real;
+};
+{
+  const mapper = mapVisibleToReal(["A", "B", "C", "D"], "D");
+  // placeholder before the first visible card -> real index 0
+  {
+    const box = makeBox([{ cls: "placeholder" }, { cls: "card" }, { cls: "card" }]);
+    assert.strictEqual(computeInsertIndex(box, box.children[0], mapper), 0);
+  }
+  // placeholder after visible card A (count 1) -> real index 2 (A, B precede)
+  {
+    const box = makeBox([{ cls: "card" }, { cls: "placeholder" }, { cls: "card" }]);
+    assert.strictEqual(computeInsertIndex(box, box.children[1], mapper), 2);
+  }
+  // placeholder after visible cards A, C (count 2) -> real index 3 (A, B, C precede)
+  {
+    const box = makeBox([{ cls: "card" }, { cls: "card" }, { cls: "placeholder" }]);
+    assert.strictEqual(computeInsertIndex(box, box.children[2], mapper), 3);
+  }
+}
+
 // --- drop-zone semantics ----------------------------------------------------
 // The placeholder is a gap BETWEEN cards. A pointer inside card Y's body
 // belongs to the gap ABOVE Y (insert before Y), and once it crosses Y's

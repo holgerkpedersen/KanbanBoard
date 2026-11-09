@@ -309,7 +309,7 @@ function renderFrame(frame) {
   visible.forEach((card) => cardsBox.appendChild(renderCard(card)));
 
   wireFrameDrag(node);
-  wireCardDropTarget(cardsBox, frame.id);
+  wireCardDropTarget(cardsBox, frame.id, frame.cards);
   return node;
 }
 
@@ -588,7 +588,26 @@ function wireCardDrag(node) {
   });
 }
 
-function wireCardDropTarget(box, frameId) {
+// Map a count of visible cards (DOM order) to the real index in the
+// frame's full card list. Filtering hides cards from the DOM, so a plain
+// DOM count would point at the wrong server position; hidden cards that
+// sit before the drop gap must be counted too. The dragged card itself is
+// excluded - the server removes it from its old position before inserting.
+function visibleCountToRealIndex(allCards, draggedId) {
+  return function (visibleCount) {
+    let real = 0;
+    for (const card of allCards) {
+      if (card.id === draggedId) continue;
+      const isVisible = cardVisible(card);
+      if (visibleCount === 0 && isVisible) break; // gap sits before this card
+      real++;
+      if (isVisible) visibleCount--;
+    }
+    return real;
+  };
+}
+
+function wireCardDropTarget(box, frameId, allCards) {
   box.addEventListener("dragover", (e) => {
     if (!draggedCardId) return;
     e.preventDefault();
@@ -603,8 +622,13 @@ function wireCardDropTarget(box, frameId) {
     e.preventDefault();
     box.classList.remove("drop-active");
     const placeholder = box.querySelector(".placeholder");
-    // Insert index = number of non-dragging cards before the placeholder.
-    const index = DnD.computeInsertIndex(box, placeholder);
+    // Insert index = cards before the placeholder, translated from the
+    // visible (filtered) DOM order into the frame's full card order.
+    const index = DnD.computeInsertIndex(
+      box,
+      placeholder,
+      visibleCountToRealIndex(allCards || [], draggedCardId)
+    );
     const cardId = draggedCardId;
     try {
       await Api.moveCard(cardId, frameId, index);
