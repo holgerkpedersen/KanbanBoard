@@ -90,4 +90,20 @@ assert.strictEqual(
   assert.strictEqual(cardAfterPoint(box, 25), null);
 }
 
+// --- drop-zone semantics ----------------------------------------------------
+// The placeholder is a gap BETWEEN cards. A pointer inside card Y's body
+// belongs to the gap ABOVE Y (insert before Y), and once it crosses Y's
+// vertical midpoint it belongs to the gap BELOW Y (insert after Y).
+// Midpoint threshold, so dropping in the bottom half of a card inserts
+// AFTER it - that is what makes "move down" land where users expect.
+{
+  const box = makeBox([{ cls: "card" }, { cls: "card" }]);
+  // Pointer at y=6 (below card0's midpoint at 5) -> gap below card0,
+  // which is before card1 in DOM order.
+  assert.strictEqual(cardAfterPoint(box, 6), box.children[1]);
+  // Pointer inside card1's top half (y=12 < midpoint 15) -> gap above
+  // card1 = after card0.
+  assert.strictEqual(cardAfterPoint(box, 12), box.children[1]);
+}
+
 console.log("test_dnd_index: ALL PASS");
