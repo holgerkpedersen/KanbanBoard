@@ -305,9 +305,12 @@
       html += textPreview;
       html += tags;
 
-      if (!isChild && node.children && node.children.length) {
-        // Recurse into children.
-        html += '<ul>' + node.children.map(function(child){ return renderCard(child, true); }).join('') + '</ul>';
+      var kids = node.children || [];
+      if (kids.length) {
+        // Recurse into children — at EVERY depth, so a card nested under a
+        // child card renders too. The old guard (recursion only from
+        // top-level nodes) stopped at depth 2 and hid grandchildren entirely.
+        html += '<ul>' + kids.map(function(child){ return renderCard(child, true); }).join('') + '</ul>';
       } else if (!isChild) {
         // No children — show a hint.
         html += '<div class="meta" style="font-style:italic;">No child cards</div>';

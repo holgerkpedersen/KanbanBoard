@@ -182,6 +182,7 @@ class BoardStore:
                 title=c["title"],
                 text=c.get("text", ""),
                 frame_id=c["frame_id"],
+                parent_id=str(c.get("parent_id", "") or ""),
                 tags=list(c.get("tags", [])),
                 system=c.get("system", ""),
                 created_at=str(c.get("created_at", "")),
