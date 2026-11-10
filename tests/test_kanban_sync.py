@@ -681,3 +681,88 @@ def test_issue_create_ignores_stale_mapping_to_deleted_card(store):
     card = _only_card(store)
     assert card.title == "Recreated"
     assert ks.resolve_id("iss-gone") == card.id
+
+
+# ---------------------------------------------------------------------------
+# Child-card emission — the Kanban-side half of the work-visibility bridge.
+# Agent1 emits a ``child_card_create`` op (parent_id + work summary) and the
+# reader must nest the resulting card under the parent via parent_id.
+# ---------------------------------------------------------------------------
+
+
+def _child_card_message(parent_id, title="Work summary", text="Work body", issue_id="iss-work"):
+    """Build an Agent1 child-card CREATE envelope for the reader test."""
+    return {
+        "op": "child_card_create",
+        "source_id": issue_id,
+        "payload": {
+            "parent_id": parent_id,
+            "title": title,
+            "text": text,
+            "issue_id": issue_id,
+            "status": "open",
+        },
+    }
+
+
+def test_child_card_create_nests_under_parent(store):
+    """A child_card_create with a valid parent creates a child with parent_id set."""
+    parent = _seed_card(store, "parent-card", title="Parent card")
+
+    ok = ks._apply_child_card_create(_child_card_message("parent-card", title="Work on card"), store)
+    assert ok is True
+
+    cards = store.get_all_cards()
+    assert len(cards) == 2
+    child = next(c for c in cards if c.id != parent.id)
+    assert child.parent_id == "parent-card"
+    assert child.frame_id == parent.frame_id, "child must land in the parent's own frame"
+    assert child.title == "Work on card"
+    assert child.system == "harnessfix"
+
+
+def test_child_card_create_without_parent_id_is_noop(store):
+    """A child_card_create with no parent_id must not create a card (best-effort)."""
+    before = len(store.get_all_cards())
+    ok = ks._apply_child_card_create(
+        {
+            "op": "child_card_create",
+            "source_id": "iss-x",
+            "payload": {"title": "orphan", "text": "orphan body"},
+        },
+        store,
+    )
+    assert ok is False
+    assert len(store.get_all_cards()) == before
+
+
+def test_child_card_create_unknown_parent_is_noop(store):
+    """A child whose parent card does not exist is a best-effort no-op, not an error."""
+    before = len(store.get_all_cards())
+    ok = ks._apply_child_card_create(_child_card_message("no-such-parent"), store)
+    assert ok is False
+    assert len(store.get_all_cards()) == before
+
+
+def test_child_card_create_malformed_payload_is_noop(store):
+    """A non-dict payload is rejected at the dispatcher; the handler stays safe."""
+    before = len(store.get_all_cards())
+    ok = ks._apply_child_card_create(
+        {"op": "child_card_create", "source_id": "iss-x", "payload": "not-a-dict"}, store
+    )
+    assert ok is False
+    assert len(store.get_all_cards()) == before
+
+
+def test_child_card_create_dispatches_via_processor(store):
+    """The message dispatcher routes child_card_create to the handler."""
+    parent = _seed_card(store, "parent-card", title="Parent card")
+    msg = _child_card_message("parent-card", title="Work summary")
+
+    ok = ks._process_single_message(msg, store)
+    assert ok is True
+
+    cards = store.get_all_cards()
+    assert len(cards) == 2
+    child = next(c for c in cards if c.id != parent.id)
+    assert child.parent_id == "parent-card"

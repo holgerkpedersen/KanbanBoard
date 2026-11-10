@@ -268,6 +268,8 @@ def issue_to_card_data(issue: dict[str, Any]) -> dict[str, Any]:
         "text": text,
         "tags": tags,
         "system": "harnessfix",
+        # Carried through so Kanban can nest this card under a parent card.
+        "parent_id": issue.get("parent_id") or issue.get("parent_card_id") or "",
     }
 
 
@@ -399,6 +401,7 @@ def _apply_issue_create(msg: dict[str, Any], store: Any) -> bool:
         title=data["title"],
         text=data["text"],
         frame_id=target_frame_id,
+        parent_id=str(data.get("parent_id") or ""),
         tags=tags,
         system="harnessfix",
     )
@@ -475,6 +478,13 @@ def _apply_issue_update(msg: dict[str, Any], store: Any) -> bool:
     if "text" in data:
         card.text = data["text"]
         updated = True
+    if "parent_id" in data and data.get("parent_id") is not None:
+        new_pid = str(data["parent_id"] or "")
+        if new_pid and store.get_card(new_pid) is None:
+            logger.warning("issue_update: parent not found: %s", new_pid)
+        else:
+            card.parent_id = new_pid
+            updated = True
 
     new_status = _status_of(issue)
     if data.get("tags"):
@@ -568,6 +578,72 @@ def _apply_issue_resolve(msg: dict[str, Any], store: Any) -> bool:
 
 # --- Inbound processor ---------------------------------------------------------
 
+def _apply_child_card_create(msg: dict[str, Any], store: Any) -> bool:
+    """Create a Kanban child card from an Agent1 child-card CREATE message.
+
+    This is the Kanban-side half of the work-visibility bridge: Agent1 emits
+    a ``child_card_create`` op carrying ``parent_id`` + a work summary, and the
+    reader nests the resulting card under the parent via ``parent_id``.
+
+    Best-effort and additive: a missing parent card, a missing frame, or a
+    missing title is a quiet no-op (never raises into the queue processor,
+    which would dead-letter the message).  The child card is created in the
+    parent's own frame so the tree grouping stays consistent with the board's
+    existing hierarchy.
+    """
+    payload = msg.get("payload")
+    if payload is None or not isinstance(payload, dict):
+        logger.warning("child_card_create: malformed payload, ignoring: %r", payload)
+        return False
+
+    parent_id = payload.get("parent_id")
+    if not isinstance(parent_id, str) or not parent_id:
+        logger.warning(
+            "child_card_create: no parent_id in payload, ignoring: %r", payload
+        )
+        return False
+
+    parent = store.get_card(parent_id)
+    if parent is None:
+        logger.info(
+            "child_card_create: parent card %s not found; child skipped (best-effort)",
+            parent_id,
+        )
+        return False
+
+    # Title/text: the work summary the child card represents.  If the sender
+    # didn't supply one, leave the card title/text empty rather than fabricate
+    # a fact — a missing fact stays None/empty, never a guessed string.
+    title = str(payload.get("title") or "").strip()
+    text = str(payload.get("text") or "").strip()
+    if not title and not text:
+        logger.warning(
+            "child_card_create: parent %s has no title/text in payload; card created empty",
+            parent_id,
+        )
+
+    # Create in the parent's own frame (not a child frame, since the board
+    # only groups by parent_id and does not manage child frames).
+    frame_id = parent.frame_id
+    from .models import Card
+    import uuid
+
+    child = Card(
+        id=uuid.uuid4().hex,
+        title=title or f"[work] {parent_id}",
+        text=text,
+        frame_id=frame_id,
+        parent_id=parent_id,
+        tags=list(payload.get("tags") or []),
+        system="harnessfix",
+    )
+
+    store.add_card(child, frame_id)
+
+    logger.info("Applied child_card_create: child %s under parent %s", child.id, parent_id)
+    return True
+
+
 def _process_single_message(msg: dict[str, Any], store: Any) -> bool:
     """Apply a single inbound message. Returns True on success."""
     op = msg.get("op", "")
@@ -585,6 +661,8 @@ def _process_single_message(msg: dict[str, Any], store: Any) -> bool:
         return _apply_issue_update(msg, store)
     elif op == "issue_resolve":
         return _apply_issue_resolve(msg, store)
+    elif op == "child_card_create":
+        return _apply_child_card_create(msg, store)
     else:
         logger.warning("Unknown inbound op: %s", op)
         return False
