@@ -277,6 +277,14 @@ def create_app(
                 secure=is_secure_request(request),
                 path="/",
             )
+        # Expose the (possibly rotated) CSRF token on every response so the
+        # client can keep its cached copy in sync with the cookie.  This is
+        # what lets an action such as "Boards -> Open" succeed after the
+        # modal's listing request rotated an expired cookie: the client reads
+        # the fresh token here instead of sending the stale meta-tag value.
+        token = getattr(g, "csrf_token", None)
+        if token:
+            response.headers["X-CSRF-Token"] = token
         # Static assets (JS/CSS) carry no inline script, so they need no nonce.
         if "Content-Security-Policy" not in response.headers:
             return apply_security_headers(response)

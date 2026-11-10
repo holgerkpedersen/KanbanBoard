@@ -5,19 +5,52 @@ const CSRF = {
   "X-Requested-With": "XMLHttpRequest",
 };
 
-// Read CSRF token from meta tag (injected by Flask template)
+// Read CSRF token from meta tag (injected by Flask template).  This is only
+// the *initial* value: the cookie may be rotated by a later response (e.g.
+// when an expired token is re-issued), so callers must read the live token
+// via ``currentCsrfToken()`` instead of trusting this cached copy.
 (function () {
   const el = document.querySelector('meta[name="csrf-token"]');
   if (el) CSRF["X-CSRF-Token"] = el.getAttribute("content");
 })();
 
+// Read the CSRF token the browser currently holds in the ``kanban_csrf``
+// cookie.  The cookie is not HttpOnly, so JS can read it; this is the
+// authoritative value after a server-side rotation and keeps the client in
+// sync with the cookie jar (fixes "Boards -> Open" failing after the modal's
+// listing request rotated an expired token).
+function readCsrfFromCookie() {
+  const m = (document.cookie || "").match(/(?:^|; )kanban_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function currentCsrfToken() {
+  return readCsrfFromCookie() || CSRF["X-CSRF-Token"];
+}
+
+// Keep the cached CSRF value in sync with whatever the server reports.  Every
+// response carries the (possibly rotated) token in the ``X-CSRF-Token``
+// header, so update the cache after each request.
+function syncCsrfFromResponse(res) {
+  try {
+    const rotated = res.headers.get("X-CSRF-Token");
+    if (rotated) CSRF["X-CSRF-Token"] = rotated;
+  } catch (e) {
+    // Headers may be unavailable; ignore.
+  }
+}
+
 async function api(method, path, body) {
-  const opts = { method, headers: { ...CSRF } };
+  const opts = {
+    method,
+    headers: { "X-Requested-With": "XMLHttpRequest", "X-CSRF-Token": currentCsrfToken() },
+  };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(path, opts);
+  syncCsrfFromResponse(res);
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -70,9 +103,10 @@ const Api = {
     const qs = activate ? "?activate=1" : "";
     return fetch(`/api/boards/upload${qs}`, {
       method: "POST",
-      headers: { ...CSRF },
+      headers: { "X-Requested-With": "XMLHttpRequest", "X-CSRF-Token": currentCsrfToken() },
       body: fd,
     }).then(async (res) => {
+      syncCsrfFromResponse(res);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || `Upload failed (${res.status})`);

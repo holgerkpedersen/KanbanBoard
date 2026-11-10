@@ -271,7 +271,13 @@ def csrf_token_is_current(token: str, max_age: int | None = None) -> bool:
     if parsed is None:
         return False
     _entropy, issued_at, lifetime = parsed
-    age = max(0, int(time.time()) - issued_at)
+    # Use wall-clock seconds with fractional precision so a token that has
+    # aged even slightly past its lifetime is treated as expired, instead of
+    # being kept alive by integer truncation (which made expiry flaky and let
+    # a rotated cookie desync from the cached meta-tag token).
+    age = time.time() - issued_at
+    if age < 0:
+        age = 0
     return age <= (max_age if max_age is not None else lifetime)
 
 
