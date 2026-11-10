@@ -628,13 +628,31 @@ def _apply_child_card_create(msg: dict[str, Any], store: Any) -> bool:
     from .models import Card
     import uuid
 
+    # Surface the resolved/issue status on the child card so the board shows
+    # what work has been done (issue_resolve emits a child card carrying the
+    # disposition in `status`). Also carry op/issue_id in the tags for trace.
+    tags = list(payload.get("tags") or [])
+    status = payload.get("status")
+    if isinstance(status, str) and status and not any(
+        t.startswith("[status:") for t in tags
+    ):
+        tags.append(f"[status:{status}]")
+    op = payload.get("op")
+    if isinstance(op, str) and op and not any(t.startswith("[op:") for t in tags):
+        tags.append(f"[op:{op}]")
+    issue_id = payload.get("issue_id")
+    if isinstance(issue_id, str) and issue_id and not any(
+        t.startswith("[issue:") for t in tags
+    ):
+        tags.append(f"[issue:{issue_id}]")
+
     child = Card(
         id=uuid.uuid4().hex,
         title=title or f"[work] {parent_id}",
         text=text,
         frame_id=frame_id,
         parent_id=parent_id,
-        tags=list(payload.get("tags") or []),
+        tags=tags,
         system="harnessfix",
     )
 
