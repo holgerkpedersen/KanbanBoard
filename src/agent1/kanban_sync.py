@@ -34,6 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from .models import now_iso
+
 logger = logging.getLogger(__name__)
 
 # --- Queue paths ---------------------------------------------------------------
@@ -578,6 +580,33 @@ def _apply_issue_resolve(msg: dict[str, Any], store: Any) -> bool:
 
 # --- Inbound processor ---------------------------------------------------------
 
+def _with_source(tags: list[str], source_id: str) -> list[str]:
+    """Add the ``[source:<id>]`` tag that ties a child card to its work item."""
+    if not source_id:
+        return list(tags)
+    out = [t for t in tags if not t.startswith("[source:")]
+    out.append(f"[source:{source_id}]")
+    return out
+
+
+def _find_child_by_source(store: Any, parent_id: str, source_id: str) -> Any:
+    """The child card of *parent_id* already created for *source_id*, if any.
+
+    Matched on the ``[source:<id>]`` tag written at creation time.  Returns
+    ``None`` when *source_id* is empty (legacy senders), so an unstamped
+    message keeps the original create-a-card behaviour.
+    """
+    if not source_id:
+        return None
+    marker = f"[source:{source_id}]"
+    for card in store.get_all_cards():
+        if getattr(card, "parent_id", "") != parent_id:
+            continue
+        if marker in (getattr(card, "tags", []) or []):
+            return card
+    return None
+
+
 def _apply_child_card_create(msg: dict[str, Any], store: Any) -> bool:
     """Create a Kanban child card from an Agent1 child-card CREATE message.
 
@@ -622,20 +651,13 @@ def _apply_child_card_create(msg: dict[str, Any], store: Any) -> bool:
             parent_id,
         )
 
-    # Create in the parent's own frame (not a child frame, since the board
-    # only groups by parent_id and does not manage child frames).
-    frame_id = parent.frame_id
-    from .models import Card
-    import uuid
-
     # Surface the resolved/issue status on the child card so the board shows
     # what work has been done (issue_resolve emits a child card carrying the
     # disposition in `status`). Also carry op/issue_id in the tags for trace.
     tags = list(payload.get("tags") or [])
     status = payload.get("status")
-    if isinstance(status, str) and status and not any(
-        t.startswith("[status:") for t in tags
-    ):
+    if isinstance(status, str) and status:
+        tags = [t for t in tags if not t.startswith("[status:")]
         tags.append(f"[status:{status}]")
     op = payload.get("op")
     if isinstance(op, str) and op and not any(t.startswith("[op:") for t in tags):
@@ -646,13 +668,46 @@ def _apply_child_card_create(msg: dict[str, Any], store: Any) -> bool:
     ):
         tags.append(f"[issue:{issue_id}]")
 
+    # Stamp the acting Agent1 session so the board shows *who* did the work.
+    sess = payload.get("agent1_session")
+    if isinstance(sess, str) and sess:
+        tag = f"[session:{sess}]"
+        tags = [t for t in tags if not t.startswith("[session:")]
+        tags.append(tag)
+
+    # Create in the parent's own frame (not a child frame, since the board
+    # only groups by parent_id and does not manage child frames).
+    frame_id = parent.frame_id
+    from .models import Card
+    import uuid
+
+    # Idempotency: Agent1 re-emits this op for the same work item on every
+    # milestone (create, promote, resolve), keyed by ``source_id``.  One work
+    # item must stay ONE child card — create it on first sight, then update it
+    # in place.  Without this the board grows a new child card per emission.
+    source_id = str(msg.get("source_id") or "")
+    existing = _find_child_by_source(store, parent_id, source_id)
+    if existing is not None:
+        existing.title = title or existing.title
+        if text:
+            existing.text = text
+        existing.tags = tags
+        existing.updated_at = now_iso()
+        store.update_card(existing)
+        logger.info(
+            "Applied child_card_create: updated child %s under parent %s",
+            existing.id,
+            parent_id,
+        )
+        return True
+
     child = Card(
         id=uuid.uuid4().hex,
         title=title or f"[work] {parent_id}",
         text=text,
         frame_id=frame_id,
         parent_id=parent_id,
-        tags=tags,
+        tags=_with_source(tags, source_id),
         system="harnessfix",
     )
 
