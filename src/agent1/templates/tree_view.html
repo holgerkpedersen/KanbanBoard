@@ -215,11 +215,46 @@
 <body>
   <a href="/" class="back-link">← Back to board view</a>
   <h1>📂 Tree View</h1>
-  <p class="subtitle">Card hierarchy: parent cards with nested child cards, grouped by frame (column).</p>
+  <p class="subtitle">Card hierarchy: parent cards with nested child cards, grouped by frame (column). Same cards as the board — search, filter and edit from here.</p>
+
+  <!-- Card filters + search: same controls and matching rules as the board view. -->
+  <section id="filter-bar" class="filter-bar" aria-label="Card filters">
+    <input
+      id="search"
+      class="search"
+      type="search"
+      placeholder="Search cards by title, text, tag or system…"
+      autocomplete="off"
+      aria-label="Search cards"
+    />
+    <div class="filter-group" role="group" aria-labelledby="filter-created-label">
+      <span id="filter-created-label" class="filter-label">Created</span>
+      <input id="filter-created-from" type="date" class="date-input" aria-label="Created from date" />
+      <span class="filter-sep" aria-hidden="true">&ndash;</span>
+      <input id="filter-created-to" type="date" class="date-input" aria-label="Created to date" />
+    </div>
+    <div class="filter-group" role="group" aria-labelledby="filter-updated-label">
+      <span id="filter-updated-label" class="filter-label">Updated</span>
+      <input id="filter-updated-from" type="date" class="date-input" aria-label="Updated from date" />
+      <span class="filter-sep" aria-hidden="true">&ndash;</span>
+      <input id="filter-updated-to" type="date" class="date-input" aria-label="Updated to date" />
+    </div>
+    <div id="tag-filter" class="tag-filter" role="group" aria-label="Tag filters"></div>
+    <button
+      id="filter-integrated"
+      class="btn btn-ghost filter-integrated"
+      type="button"
+      aria-pressed="false"
+      title="Show only cards linked to an Agent1 issue"
+    >🔗 Integrated</button>
+    <button id="show-descriptions" class="btn btn-ghost filter-descriptions active" type="button" aria-pressed="true" title="Toggle card descriptions on the tree">📝 Descriptions</button>
+    <button id="clear-filters" class="btn btn-ghost filter-clear" type="button">Clear</button>
+  </section>
 
   <div class="controls" id="controls" hidden>
-    <button onclick="expandAll()">Expand all</button>
-    <button onclick="collapseAll()">Collapse all</button>
+    <button type="button" onclick="TreeApp.expandAll()">Expand all</button>
+    <button type="button" onclick="TreeApp.collapseAll()">Collapse all</button>
+    <button id="add-card" class="btn btn-primary" type="button">+ Add Card</button>
   </div>
 
   <!-- Theme picker (mirrors the one on index.html) -->
@@ -236,6 +271,64 @@
   <div id="loading">Loading tree…</div>
   <div id="error"></div>
   <main class="tree" id="tree-root"></main>
+
+  <!-- Card editor dialog: the same fields as the board view's editor, so a
+       card edited here lands on the board with identical data. The frame
+       select is the tree view's stand-in for drag & drop. -->
+  <div id="card-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="card-modal-title">
+    <div class="modal-backdrop" data-close></div>
+    <form id="card-form" class="modal-card card-modal-card">
+      <h2 id="card-modal-title">Edit card</h2>
+      <label>
+        Title
+        <input id="card-title" name="title" type="text" maxlength="200" required />
+      </label>
+      <label>
+        Description
+        <textarea id="card-text" name="text" maxlength="2000" rows="8"></textarea>
+      </label>
+      <label>
+        Tags (comma separated)
+        <input id="card-tags" name="tags" type="text" />
+      </label>
+      <label>
+        System
+        <input id="card-system" name="system" type="text" maxlength="60" placeholder="e.g. Billing, Auth, API" />
+      </label>
+      <label>
+        Status
+        <select id="card-status" name="status">
+          <option value="open">open</option>
+          <option value="planned">planned</option>
+          <option value="in-progress">in-progress</option>
+          <option value="reviewing">reviewing</option>
+          <option value="done">done</option>
+        </select>
+      </label>
+      <label>
+        Frame (column)
+        <select id="card-frame" name="frame"></select>
+      </label>
+      <label>
+        Parent card (optional)
+        <select id="card-parent">
+          <option value="">— None —</option>
+        </select>
+      </label>
+      <div id="card-id-field" class="modal-id-field" hidden>
+        <span class="modal-id-label">Card ID</span>
+        <div class="modal-id-row">
+          <input id="card-id" type="text" class="modal-id-input" readonly />
+          <button id="card-id-copy" class="btn modal-id-copy" type="button">Copy</button>
+        </div>
+      </div>
+      <p id="card-dates" class="modal-dates" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
 
   <script nonce="{{ theme_nonce }}">
     (function () {
@@ -254,136 +347,10 @@
       }
     })();
 
-    var treeRoot = document.getElementById('tree-root');
-    var loadingEl = document.getElementById('loading');
-    var errorEl = document.getElementById('error');
-    var controlsEl = document.getElementById('controls');
-
-    function statusClass(s) { return 'status-' + (s || 'open').replace(/ /g, '-'); }
-
-    function escapeHtml(str) {
-      if (!str) return '';
-      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
-
-    // Build a single card node (parent or child).
-    function renderCard(node, isChild) {
-      var tags = '';
-      if (node.tags && node.tags.length) {
-        tags = '<div>' + node.tags.map(function(t){ return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('') + '</div>';
-      }
-
-      // Shorten text preview to first 120 chars.
-      var textPreview = '';
-      if (node.text && !isChild) {
-        var shortText = node.text.length > 120 ? node.text.substring(0, 120) + '…' : escapeHtml(node.text);
-        textPreview = '<div class="text-preview">' + shortText + '</div>';
-      }
-
-      var html = '';
-      if (isChild) {
-        html += '<li><div class="card-child">';
-      } else {
-        html += '<li><div class="card-parent" onclick="toggleChildren(this)">';
-      }
-
-      var statusBadge = '<span class="' + statusClass(node.status) + '">' + (node.status || 'open') + '</span>';
-
-      if (isChild) {
-        html += '<div class="title">' + escapeHtml(node.title) + '</div>';
-      } else {
-        html += '<div class="title"><span class="toggle-icon" aria-hidden="true">▶</span>' + escapeHtml(node.title) + ' ' + statusBadge + '</div>';
-      }
-
-      if (node.system) {
-        html += '<div class="meta">System: ' + escapeHtml(node.system) + '</div>';
-      }
-      if (!isChild && node.created_at) {
-        var created = new Date(node.created_at);
-        html += '<div class="meta">Created: ' + created.toLocaleDateString() + ' ' + created.toLocaleTimeString() + '</div>';
-      }
-      html += textPreview;
-      html += tags;
-
-      var kids = node.children || [];
-      if (kids.length) {
-        // Recurse into children — at EVERY depth, so a card nested under a
-        // child card renders too. The old guard (recursion only from
-        // top-level nodes) stopped at depth 2 and hid grandchildren entirely.
-        html += '<ul>' + kids.map(function(child){ return renderCard(child, true); }).join('') + '</ul>';
-      } else if (!isChild) {
-        // No children — show a hint.
-        html += '<div class="meta" style="font-style:italic;">No child cards</div>';
-      }
-
-      html += '</div></li>';
-      return html;
-    }
-
-    function renderTree(treeData) {
-      if (!treeData || !treeData.length) {
-        treeRoot.innerHTML = '<p style="color:var(--muted);">No cards found in the board.</p>';
-        return;
-      }
-
-      var html = '';
-      treeData.forEach(function(frame) {
-        html += '<div class="frame-section">';
-        html += '<h2 class="frame-title">' + escapeHtml(frame.frame_title) + '</h2>';
-        if (frame.parents && frame.parents.length) {
-          html += '<ul>' + frame.parents.map(function(parent){ return renderCard(parent, false); }).join('') + '</ul>';
-        } else {
-          html += '<p style="color:var(--muted);font-style:italic;">No parent cards in this frame.</p>';
-        }
-        html += '</div>';
-      });
-
-      treeRoot.innerHTML = html;
-    }
-
-    function toggleChildren(el) {
-      var icon = el.querySelector('.toggle-icon');
-      var ul = el.nextElementSibling;
-      if (!ul || !ul.tagName || ul.tagName.toLowerCase() !== 'ul') return;
-
-      var isHidden = ul.style.display === 'none';
-      ul.style.display = isHidden ? '' : 'none';
-      icon.classList.toggle('expanded', isHidden);
-    }
-
-    function expandAll() {
-      document.querySelectorAll('.tree > ul, .tree ul ul').forEach(function(ul){
-        ul.style.display = '';
-      });
-      document.querySelectorAll('.toggle-icon').forEach(function(icon){
-        icon.classList.add('expanded');
-      });
-    }
-
-    function collapseAll() {
-      document.querySelectorAll('.tree > ul, .tree ul ul').forEach(function(ul){
-        ul.style.display = 'none';
-      });
-      document.querySelectorAll('.toggle-icon').forEach(function(icon){
-        icon.classList.remove('expanded');
-      });
-    }
-
-    // Fetch tree data and render.
-    fetch('/api/frames/tree')
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
-        loadingEl.style.display = 'none';
-        controlsEl.hidden = false;
-        // Expand all by default.
-        expandAll();
-        renderTree(data);
-      })
-      .catch(function(err) {
-        loadingEl.style.display = 'none';
-        errorEl.style.display = 'block';
-        errorEl.textContent = 'Failed to load tree: ' + err.message;
-      });
   </script>
+  <script src="{{ url_for('static', filename='search.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='cardid.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='boardapi.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='treeview.js') }}" defer></script>
 </body>
 </html>

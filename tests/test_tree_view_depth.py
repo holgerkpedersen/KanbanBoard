@@ -28,6 +28,25 @@ TEMPLATE = (
     / "src" / "agent1" / "templates" / "tree_view.html"
 )
 
+# The renderer moved out of the template's inline script into a static module
+# (``static/treeview.js``) shared with the board's scripts. The assertions
+# below are about the *renderer*, so they read the module; the ES5 contract
+# and the CSP contract stay anchored to the template (see
+# ``test_tree_view_html_stays_es5`` and ``test_served_tree_view_has_no_depth_gate``).
+RENDERER = (
+    Path(__file__).resolve().parents[1]
+    / "src" / "agent1" / "static" / "treeview.js"
+)
+
+
+def _renderer_src() -> str:
+    """The renderer source, plus the HTML of the page that loads it — so a
+    grep assertion passes only when the served /tree-view really references
+    the module containing it. A stale template that dropped the ``<script>``
+    tag must fail."""
+    html = _client().get("/tree-view").get_data(as_text=True)
+    return RENDERER.read_text(encoding="utf-8") + "\n" + html
+
 
 def _client():
     app = create_app()
@@ -123,7 +142,7 @@ def test_renderer_recurses_on_children_not_on_is_child():
     so a child card that itself has children rendered as a leaf and its whole
     subtree disappeared.
     """
-    src = TEMPLATE.read_text(encoding="utf-8")
+    src = _renderer_src()
 
     assert "node.children" in src, "renderer must inspect node.children"
     assert "!isChild && node.children && node.children.length" not in src, (
@@ -134,7 +153,7 @@ def test_renderer_recurses_on_children_not_on_is_child():
 
 def test_renderer_renders_children_of_child_nodes():
     """A child node with children must emit a nested <ul> for them."""
-    src = TEMPLATE.read_text(encoding="utf-8")
+    src = _renderer_src()
 
     # The recursion call must pass `true` (this node is a child) while being
     # reachable from child nodes too — i.e. it sits in the data-driven branch.
@@ -185,20 +204,29 @@ def test_deep_tree_renders_all_levels():
 
 
 def test_served_tree_view_has_no_depth_gate():
-    """The page Flask serves must not contain the depth-2 recursion gate.
+    """The page Flask serves must load a renderer free of the depth-2 gate.
 
     The live board regression: a card two levels deep (``parent`` -> ``child``
     -> card) never appeared in /tree-view because the renderer recursed only
     from top-level nodes.  A source-file grep can miss a stale copy served
-    from elsewhere, so assert against the response body itself.
+    from elsewhere, so assert against the response body itself: the page must
+    reference the renderer module, and neither that module nor the page may
+    carry the depth-2 gate.
     """
     html = _client().get("/tree-view").get_data(as_text=True)
 
-    assert "node.children" in html, (
-        "the served renderer must inspect node.children at every depth"
+    # The renderer lives in a static module now; a page that stopped loading
+    # it would render nothing at all, so pin the wiring on the served HTML.
+    assert "/static/treeview.js" in html, (
+        "the served page must load the tree renderer"
     )
-    assert "!isChild && node.children && node.children.length" not in html, (
-        "the served page still carries the depth-2 gate — the card nested "
+    src = _renderer_src()  # module source + served HTML
+
+    assert "node.children" in src, (
+        "the renderer must inspect node.children at every depth"
+    )
+    assert "!isChild && node.children && node.children.length" not in src, (
+        "the renderer still carries the depth-2 gate — the card nested "
         "under a child card will not render"
     )
 

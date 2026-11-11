@@ -1,6 +1,9 @@
 # Runtime board data (persisted frames/cards)
 data/
 
+# Test scratch dirs (pytest tmp basetemp under repo root)
+_bt/
+
 # Python
 __pycache__/
 *.pyc
