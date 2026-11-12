@@ -311,6 +311,38 @@ def test_process_single_message_dispatches_all_ops(store):
     assert ks._process_single_message({"op": "nope"}, store) is False
 
 
+def test_card_claimed_is_consumed_not_dead_lettered(store, tmp_path, monkeypatch):
+    """Regression: Agent1 ``card_claimed`` was an unknown op and dead-lettered.
+
+    The claim is advisory; the board must accept it (True) so the queue
+    consumes it instead of retrying it into ``dead_letters/``.
+    """
+    msg = {
+        "op": "card_claimed",
+        "source_id": "",
+        "payload": {"card_id": "abc123", "owner": "agent-x", "claimed_at": "t"},
+    }
+    assert ks._process_single_message(msg, store) is True
+
+    monkeypatch.setattr(ks, "DEAD_LETTER_DIR", tmp_path / "dead-letter")
+    qdir = tmp_path / "queue-agent1-in"
+    qdir.mkdir()
+    (qdir / "messages.jsonl").write_text(
+        '{"seq": 1, "op": "card_claimed", "payload": {"card_id": "abc123"}}\n',
+        encoding="utf-8",
+    )
+    assert ks.process_inbound(store, qdir) == 1
+    for _ in range(ks.MAX_RETRIES):
+        ks.process_inbound(store, qdir)
+    assert not list((tmp_path / "dead-letter").glob("seq_*.jsonl"))
+
+
+def test_card_claimed_malformed_payload_is_rejected(store):
+    assert ks._process_single_message(
+        {"op": "card_claimed", "payload": "not-a-dict"}, store
+    ) is False
+
+
 def test_process_single_message_rejects_malformed_payload(store):
     """A malformed payload is rejected cleanly, not raised out of the processor.
 

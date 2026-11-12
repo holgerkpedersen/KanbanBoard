@@ -717,6 +717,24 @@ def _apply_child_card_create(msg: dict[str, Any], store: Any) -> bool:
     return True
 
 
+def _apply_card_claimed(msg: dict[str, Any], store: Any) -> bool:
+    """Acknowledge an Agent1 ``card_claimed`` advisory notification.
+
+    Agent1 announces that an agent has claimed a card so other agents can
+    avoid duplicate work.  The claim is advisory and lives in Agent1's own
+    ``.card_claims.json``; this board has no owner field to store it in.  The
+    message is therefore consumed as a quiet no-op (``True``) rather than
+    retried into a dead letter.  A malformed payload is still rejected.
+    """
+    payload = _payload_of(msg, require_title=False)
+    if payload is None:
+        logger.warning("card_claimed: malformed payload, ignoring: %r", msg.get("payload"))
+        return False
+    card_id = payload.get("card_id") or msg.get("target_ref") or ""
+    logger.info("card_claimed: advisory claim on card %s acknowledged", card_id or "?")
+    return True
+
+
 def _process_single_message(msg: dict[str, Any], store: Any) -> bool:
     """Apply a single inbound message. Returns True on success."""
     op = msg.get("op", "")
@@ -736,6 +754,8 @@ def _process_single_message(msg: dict[str, Any], store: Any) -> bool:
         return _apply_issue_resolve(msg, store)
     elif op == "child_card_create":
         return _apply_child_card_create(msg, store)
+    elif op == "card_claimed":
+        return _apply_card_claimed(msg, store)
     else:
         logger.warning("Unknown inbound op: %s", op)
         return False
