@@ -14,6 +14,7 @@ is built with string concatenation and no arrow functions, template literals
 or ``let``/``const``, because IE-mode webviews choke on ES6.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -270,3 +271,42 @@ def test_parent_id_survives_reload(tmp_path):
     client = _api()
     tree = client.get("/api/frames/tree")
     assert tree.status_code == 200
+
+
+def test_tree_cards_expose_card_tools_css():
+    """Tree-view cards must show the hover edit/delete tools.
+
+    The renderer emits ``<div class="card-tools">`` with edit and delete
+    buttons on every card (parent and child alike), and the click handlers
+    in ``treeview.js`` are wired.  The live regression was purely CSS: the
+    tool bar is absolutely positioned, so it needs ``position: relative`` on
+    the card and a ``:hover`` rule that matches tree cards — whose classes
+    are ``card-parent`` / ``card-child``, not ``card``.  Without them the
+    buttons render off-position and stay invisible on hover.
+    """
+    css = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "agent1" / "static" / "style.css"
+    ).read_text(encoding="utf-8")
+
+    # The tool bar is positioned relative to the card, and tree cards are
+    # the positioning context.
+    assert re.search(
+        r"\.card-parent,\s*\.card-child\s*\{[^}]*position:\s*relative", css
+    ), "tree cards must be position:relative or .card-tools floats away"
+    # Hover on a tree card reveals the tools, same as on a board card.
+    assert ".card-parent:hover .card-tools" in css, (
+        "hovering a parent card must reveal its edit/delete tools"
+    )
+    assert ".card-child:hover .card-tools" in css, (
+        "hovering a child card must reveal its edit/delete tools"
+    )
+
+    # The renderer must keep emitting the markup these rules target.
+    src = _renderer_src()
+    assert 'class="card-tools"' in src, (
+        "the renderer must emit the .card-tools bar the CSS reveals"
+    )
+    assert "card-edit" in src and "card-del" in src, (
+        "tree cards need edit and delete buttons"
+    )
