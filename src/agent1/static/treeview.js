@@ -172,6 +172,9 @@
     // Card tools: the tree view edits the same cards as the board.
     html +=
       '<div class="card-tools">' +
+      '<button class="icon-btn card-work" type="button" title="Work (send to Agent1)" data-card-id="' +
+      escHtml(node.id) +
+      '">▶</button>' +
       '<button class="icon-btn card-edit" type="button" title="Edit" data-card-id="' +
       escHtml(node.id) +
       '">✎</button>' +
@@ -503,6 +506,21 @@
             }, 1200);
           });
         }
+        return;
+      }
+
+      var workBtn = e.target.closest ? e.target.closest(".card-work") : null;
+      if (workBtn) {
+        var workId = workBtn.getAttribute("data-card-id");
+        var workCard = state.cards[workId];
+        if (!workCard) return;
+        BoardApi.Api.workCard(workId)
+          .then(function () {
+            alert('Sent "' + workCard.title + '" to Agent1.');
+          })
+          ["catch"](function (err) {
+            alert(err.message);
+          });
         return;
       }
 

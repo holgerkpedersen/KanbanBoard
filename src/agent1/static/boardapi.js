@@ -91,6 +91,7 @@
       api("POST", "/api/cards", { frame_id: frameId, ...card }),
     updateCard: (id, card) => api("PUT", `/api/cards/${id}`, card),
     deleteCard: (id) => api("DELETE", `/api/cards/${id}`),
+    workCard: (id) => api("POST", `/api/cards/${id}/work`, {}),
     moveCard: (id, frameId, index) =>
       api("POST", `/api/cards/${id}/move`, { frame_id: frameId, index }),
     // Card ids linked to an Agent1 issue (read-only view of the shared

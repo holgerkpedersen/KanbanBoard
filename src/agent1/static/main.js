@@ -69,6 +69,7 @@ const Api = {
     api("POST", "/api/cards", { frame_id: frameId, ...card }),
   updateCard: (id, card) => api("PUT", `/api/cards/${id}`, card),
   deleteCard: (id) => api("DELETE", `/api/cards/${id}`),
+  workCard: (id) => api("POST", `/api/cards/${id}/work`, {}),
   moveCard: (id, frameId, index) =>
     api("POST", `/api/cards/${id}/move`, { frame_id: frameId, index }),
   // Card ids linked to an Agent1 issue (read-only view of the shared
@@ -405,6 +406,15 @@ function renderCard(card) {
   $(".card-edit", node).addEventListener("click", () =>
     openCardModal(card.frame_id, card)
   );
+  $(".card-work", node).addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await Api.workCard(card.id);
+      alert(`Sent "${card.title}" to Agent1.`);
+    } catch (err) {
+      alert(err.message);
+    }
+  });
   $(".card-del", node).addEventListener("click", async () => {
     if (!confirm(`Delete card "${card.title}"?`)) return;
     try {

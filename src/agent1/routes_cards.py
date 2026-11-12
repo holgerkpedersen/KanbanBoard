@@ -203,6 +203,42 @@ def create_card_blueprint(store: BoardStore) -> Blueprint:
 
         return apply_security_headers(jsonify(card.to_dict()))
 
+    @bp.route("/<card_id>/work", methods=["POST"])
+    def work_card(card_id: str) -> Response:
+        """Hand a card to Agent1 for execution (the board's Work button).
+
+        Only queues a ``card_work`` request; Agent1 decides whether and how to
+        act on it. Fails closed: without the sync opt-in nothing is queued.
+        """
+        store = current_store()
+        card = store.get_card(card_id)
+        if card is None:
+            return jsonify({"error": "not found"}), 404
+        if not _should_sync():
+            return apply_security_headers(
+                jsonify({"error": "agent1 sync is not enabled for this board"})
+            ), 409
+        kb = _get_kanban_sync()
+        if kb is None:
+            return apply_security_headers(
+                jsonify({"error": "agent1 sync module unavailable"})
+            ), 503
+        frame = store.get_frame(card.frame_id)
+        kb.enqueue({
+            "op": "card_work",
+            "source_id": card.id,
+            "payload": {
+                "card_id": card.id,
+                "title": card.title,
+                "text": card.text,
+                "status": card.status,
+                "frame_title": frame.title if frame is not None else "",
+            },
+        })
+        resp = jsonify({"queued": True, "card_id": card.id})
+        resp.status_code = 202
+        return apply_security_headers(resp)
+
     @bp.route("/<card_id>", methods=["DELETE"])
     def delete_card_endpoint(card_id: str) -> Response:
         if current_store().get_card(card_id) is None:
