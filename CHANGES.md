@@ -2,6 +2,29 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-12 - Fix: pytest exit noise from a wedged pytest-current link
+
+- **Gap.** Every tmp-using pytest run on the machine ended with
+  Exception ignored in atexit callback + PermissionError: [WinError 5]
+  on .../Temp/pytest-of-Holger/pytest-current - a wedged symlink
+  (enumerable, but every open/stat/delete gets error 5: delete-pending
+  after a crashed or privileged run). Exit code stayed 0, but the stderr
+  noise makes run wrappers report failures and confuses the agent loop.
+- **Root cause.** pytest registers cleanup_numbered_dir via texit;
+  its cleanup_dead_symlinks(root) sweep does an unguarded
+  left_dir.resolve().exists() that re-raises WinError 5 for such an
+  entry instead of returning False. The link cannot be removed from
+  userspace right now (rmdir/DeleteFileW/RemoveDirectoryW/rename all
+  error 5); delete-pending names clear when the OS releases them, and a
+  normal (unprivileged) shell cannot even recreate pytest-current
+  (os.symlink -> WinError 1314), so this is a one-off artifact.
+- **Fix: guard the sweep.** 	ests/conftest.py now arms
+  _harden_pytest_temp_cleanup() at import: it wraps
+  _pytest.pathlib.cleanup_dead_symlinks so an unstatable entry is
+  skipped (OSError only; the wrap is idempotent and a no-op if pytest
+  ever renames the function). Regression tests:
+  	ests/test_pytest_temp_cleanup_guard.py (4).
+
 ## 2026-11-05 — Security: CSRF tokens now expire
 
 - **Gap.** Tokens minted by the 2026-11-05 fix were immortal. The payload was
