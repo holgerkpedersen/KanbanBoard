@@ -463,6 +463,10 @@ html, body {
 
 .card-tools { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
 .card:hover .card-tools { display: flex; }
+/* Tree view cards carry the same tools as board cards: edit and delete. */
+.card-parent, .card-child { position: relative; }
+.card-parent:hover .card-tools,
+.card-child:hover .card-tools { display: flex; }
 
 .placeholder {
   border: 2px dashed var(--accent);
