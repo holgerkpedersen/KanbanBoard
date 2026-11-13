@@ -2,6 +2,34 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-13 — Fix: Work button said "agent1 sync is not enabled" while the checkbox was ticked
+
+- **Gap.** Pressing the card's Work button returned
+  `409 {"error": "agent1 sync is not enabled for this board"}` even though
+  "Agent1 sync" was checked in the board dialog. The card never reached Agent1.
+- **Root cause: two resolvers for one switch.** The outbound gate
+  `routes_cards._should_sync()` read the process-level master switch from
+  `os.environ` only (`KANBAN_SYNC_ENABLED != "1"` → refuse). Every other
+  consumer — app startup in `app.create_app()` and the inbound
+  `QueueProcessor` — resolves it through `kanban_sync.sync_enabled()`, which
+  reads the process environment first and then the repo `.env` file. An
+  operator who flips the switch in `.env` therefore got a running sync pipeline
+  whose Work button stayed shut. Worse, the gate reports a single message for
+  both of its gates, so the 409 blamed the per-board opt-in — which was
+  genuinely `{"agent1": true}` on disk — and pointed at the one setting that
+  was correct.
+- **Fix: one resolver, one truth.** `_should_sync()` now calls
+  `kanban_sync.sync_enabled()`, so gate 1 is resolved exactly like the rest of
+  the app; the per-board gate 2 is unchanged and still fails closed. The
+  docstring records why reading `os.environ` directly here is wrong. The now
+  unused `import os` was dropped from `routes_cards.py`.
+- **Regression tests.** `tests/test_card_work_sync_switch.py` (5) drives the
+  real Flask route: `.env`-only switch queues `card_work` (the reported
+  failure, red before the fix); a board opt-out still yields the 409 that names
+  it; master switch off in both layers writes nothing to the queue; an explicit
+  process-env `0` overrides `.env`; and `_should_sync()` tracks
+  `sync_enabled()`. Full suite: 251 passed.
+
 ## 2026-11-12 - Fix: pytest exit noise from a wedged pytest-current link
 
 - **Gap.** Every tmp-using pytest run on the machine ended with

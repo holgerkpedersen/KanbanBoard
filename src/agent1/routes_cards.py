@@ -8,7 +8,6 @@ from flask import (
     Response,
 )
 from typing import Any, Dict
-import os
 import uuid
 
 from .store import BoardStore
@@ -35,16 +34,27 @@ def _should_sync() -> bool:
 
     Two independent gates must both pass (layered control):
 
-    1. the process-level master switch ``KANBAN_SYNC_ENABLED=1`` (env var), and
+    1. the process-level master switch ``KANBAN_SYNC_ENABLED``, resolved by
+       ``kanban_sync.sync_enabled()`` — process environment first, then the
+       repo ``.env`` file; and
     2. the *active board* has opted in to agent1 sync via its on-disk
        ``"sync"`` map — a per-board setting the user toggles in the UI.
 
     A board without the opt-in never emits card ops, so unlinked boards can't
     pollute Agent1's issue ledger or queue.
+
+    Gate 1 MUST go through ``sync_enabled()`` and not read ``os.environ``
+    directly. The app startup (``app.create_app``) and the inbound
+    ``QueueProcessor`` both resolve the switch through that resolver, so an
+    operator who flips it in ``.env`` gets a running sync pipeline. Reading
+    only ``os.environ`` here made the Work button answer 409 "agent1 sync is
+    not enabled for this board" while the checkbox was ticked — the message
+    blamed gate 2, which was correctly set, and the card never reached Agent1.
     """
-    if os.environ.get("KANBAN_SYNC_ENABLED", "0") != "1":
+    kb = _get_kanban_sync()
+    if kb is None:
         return False
-    if _get_kanban_sync() is None:
+    if not kb.sync_enabled():
         return False
     return current_store().sync_allowed("agent1")
 
