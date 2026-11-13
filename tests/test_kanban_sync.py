@@ -798,3 +798,147 @@ def test_child_card_create_dispatches_via_processor(store):
     assert len(cards) == 2
     child = next(c for c in cards if c.id != parent.id)
     assert child.parent_id == "parent-card"
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point: ``main()`` used to call ``process_inbound(None, qdir)``, so
+# every op dereferenced ``store.get_card`` on ``None`` and manual queue
+# draining crashed.  The CLI must bind a real store — explicit --board first,
+# the registry's active board second — and refuse cleanly when neither exists.
+# ---------------------------------------------------------------------------
+
+
+def _seeded_board(path):
+    """A board file with the canonical columns (a card needs a frame to land in)."""
+    s = BoardStore(path=str(path))
+    for title in FRAME_TITLES:
+        s.add_frame(Frame(id=uuid.uuid4().hex, title=title))
+    return s
+
+
+def _write_inbound(qdir, *source_ids):
+    """Write one issue_create message per source id into ``qdir``."""
+    qdir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(
+            {
+                "seq": i + 1,
+                "op": "issue_create",
+                "source_id": sid,
+                "payload": {"id": sid, "title": f"queued {sid}", "status": "open"},
+                "processed": False,
+            }
+        )
+        for i, sid in enumerate(source_ids)
+    ]
+    (qdir / "messages.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_cli_main_applies_queue_to_explicit_board(tmp_path, monkeypatch, capsys):
+    """``--process-in --board <file>`` drains the queue into that board file."""
+    board_path = tmp_path / "board-cli.json"
+    _seeded_board(board_path)
+    qdir = tmp_path / "queue-agent1-in"
+    _write_inbound(qdir, "iss-cli-1", "iss-cli-2")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["kanban_sync", "--process-in", "--board", str(board_path), "--queue-dir", str(qdir)],
+    )
+    assert ks.main() == 0
+
+    saved = json.loads(board_path.read_text(encoding="utf-8"))
+    titles = sorted(c["title"] for c in saved["cards"])
+    assert titles == ["queued iss-cli-1", "queued iss-cli-2"], (
+        "the CLI must apply queued messages to the board it was pointed at"
+    )
+    out = capsys.readouterr().out
+    assert "Processed 2 messages" in out
+
+
+def test_cli_main_uses_active_board_from_registry(tmp_path, monkeypatch, capsys):
+    """Without --board, the CLI applies to the registry's active board file.
+
+    This is the same resolution the web app uses (``data/active.json`` →
+    ``data/board-<id>.json``), so a manual drain mutates the live board
+    instead of crashing on ``store=None``.
+    """
+    from src.agent1.board_registry import BoardRegistry
+
+    # The autouse fixture already created tmp_path/data and pointed DATA_DIR
+    # there; reuse it so the registry and board files land where _cli_store
+    # looks.
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ks, "DATA_DIR", data_dir)
+
+    board_path = data_dir / "board-live.json"
+    _seeded_board(board_path)
+    BoardRegistry(path=str(data_dir / "active.json")).set_active("live")
+
+    qdir = tmp_path / "queue-agent1-in"
+    _write_inbound(qdir, "iss-cli-3")
+
+    monkeypatch.setattr(sys, "argv", ["kanban_sync", "--process-in", "--queue-dir", str(qdir)])
+    assert ks.main() == 0
+
+    saved = json.loads(board_path.read_text(encoding="utf-8"))
+    assert [c["title"] for c in saved["cards"]] == ["queued iss-cli-3"]
+
+
+def test_cli_main_refuses_without_any_board(tmp_path, monkeypatch, capsys):
+    """No --board and no active board: exit non-zero with a clear message.
+
+    The old behaviour was to pass ``None`` and crash inside the first op;
+    refusing up-front is the contract.
+    """
+    # tmp_path/data exists (autouse fixture) but holds no active.json.
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ks, "DATA_DIR", data_dir)  # registry file absent
+
+    qdir = tmp_path / "queue-agent1-in"
+    _write_inbound(qdir, "iss-cli-4")
+
+    monkeypatch.setattr(sys, "argv", ["kanban_sync", "--process-in", "--queue-dir", str(qdir)])
+    assert ks.main() == 2
+
+    err = capsys.readouterr().err
+    assert "No board to apply messages to" in err
+    # The queue must be untouched — nothing was applied, nothing consumed.
+    assert not (qdir / "offset.txt").exists()
+
+
+def test_cli_main_without_flags_prints_help(tmp_path, monkeypatch):
+    """Bare invocation shows usage and exits non-zero (unchanged behaviour)."""
+    monkeypatch.setattr(sys, "argv", ["kanban_sync"])
+    assert ks.main() == 1
+
+
+def test_cli_store_explicit_path_beats_registry(tmp_path, monkeypatch):
+    """--board wins over the active board, so operators can drain to a copy."""
+    from src.agent1.board_registry import BoardRegistry
+
+    data_dir = tmp_path / "data"  # created by the autouse fixture
+    monkeypatch.setattr(ks, "DATA_DIR", data_dir)
+
+    live = data_dir / "board-live.json"
+    _seeded_board(live)
+    BoardRegistry(path=str(data_dir / "active.json")).set_active("live")
+
+    explicit = tmp_path / "copy.json"
+    BoardStore(path=str(explicit)).add_frame(Frame(id="f-ideas", title="Ideas"))
+
+    store = ks._cli_store(str(explicit))
+    assert store is not None
+    assert Path(store.path) == explicit
+
+
+def test_cli_store_registry_pointing_at_missing_file_is_none(tmp_path, monkeypatch):
+    """An active id whose board file is gone yields None (caller refuses)."""
+    from src.agent1.board_registry import BoardRegistry
+
+    data_dir = tmp_path / "data"  # created by the autouse fixture
+    monkeypatch.setattr(ks, "DATA_DIR", data_dir)
+    BoardRegistry(path=str(data_dir / "active.json")).set_active("ghost")
+
+    assert ks._cli_store(None) is None

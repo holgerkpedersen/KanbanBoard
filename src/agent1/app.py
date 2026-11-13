@@ -210,7 +210,18 @@ def create_app(
     # module-private — no request path consumes it, so callers cannot reach
     # the live app through it; an extra create_app() only re-points which app a
     # processor reads its store from.
-    if os.environ.get("KANBAN_SYNC_ENABLED", "0") == "1":
+    # Resolve the switch through kanban_sync.sync_enabled(): process env
+    # first, repo .env second. A bare os.environ read made the documented
+    # .env switch dead — the app booted with sync silently off and the
+    # Agent1→Kanban queue never drained. Import is local so a broken sync
+    # module can never take the web app down (the except below covers it).
+    try:
+        from . import kanban_sync as _kb_gate
+        _sync_on = _kb_gate.sync_enabled()
+    except Exception as exc:  # noqa: BLE001 — sync is optional; app must boot
+        logger.error("Failed to resolve sync master switch: %s", exc)
+        _sync_on = False
+    if _sync_on:
         _sync_handles = getattr(sys.modules[__name__], "_SYNC_HANDLES", None)
         # The module sentinel starts as [] ("no processor yet"), so an
         # `is None` test never fires: it must be falsy, not None, for the

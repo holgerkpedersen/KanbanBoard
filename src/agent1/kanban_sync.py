@@ -53,6 +53,47 @@ QUEUE_KANBAN_TO_AGENT1 = DATA_DIR / "queue-kanban-to-agent1"   # we write, Agent
 # Must match Agent1's CARD_ID_MAP_PATH: one shared issue↔card mapping.
 CARD_ID_MAP_PATH = DATA_DIR / ".card_id_map.json"
 
+# --- Master switch --------------------------------------------------------------
+
+_SYNC_ENV_VAR = "KANBAN_SYNC_ENABLED"
+# Repo-root .env (the app runs with cwd == repo root; DATA_DIR is "data").
+_ENV_FILE = DATA_DIR.parent / ".env"
+
+
+def sync_enabled() -> bool:
+    """Resolve the process-level sync master switch.
+
+    Two layers, in priority order (the same resolution Agent1's bridge uses):
+
+      1. the process environment (``KANBAN_SYNC_ENABLED``) — wins if set;
+      2. the repo ``.env`` file — the documented place an operator flips the
+         switch when the app is started by hand, a scheduler or a service
+         wrapper that does not export variables.
+
+    Reading only ``os.environ`` made the ``.env`` switch dead: the app booted
+    with sync silently off, the Agent1→Kanban queue stopped draining, and
+    resolved issues never moved their cards to Finished.
+
+    A value is "on" when it is non-empty and not ``0``/``false``/``no``/``off``
+    (case-insensitive). Any read failure means off — sync must fail closed.
+    """
+    raw = os.environ.get(_SYNC_ENV_VAR)
+    if raw is None:
+        try:
+            for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("#"):
+                    continue
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == _SYNC_ENV_VAR:
+                    raw = value.strip().strip("'\"")
+                    break
+        except OSError:
+            return False
+    if raw is None:
+        return False
+    return raw.strip().lower() not in ("", "0", "false", "no", "off")
+
 _OFFSET_LOCKS: Dict[str, threading.Lock] = {}
 _offset_locks_lock = threading.Lock()
 
@@ -994,20 +1035,69 @@ class QueueProcessor:
 
 # --- CLI entry point -----------------------------------------------------------
 
+def _cli_store(board_path: str | None = None) -> Any:
+    """Build the store the CLI applies inbound messages to.
+
+    ``process_inbound`` mutates a live board; passing ``None`` (as this CLI
+    used to) made every op dereference ``store.get_card`` on ``None`` and
+    crash, so manual queue draining never worked at all.  Resolution order:
+
+      1. ``--board`` (``board_path``) — an explicit working copy;
+      2. the registry's active board — ``data/active.json`` pointing at
+         ``data/board-<id>.json``, exactly what the web app applies to;
+      3. ``None`` — nothing to apply to; the caller reports and exits non-zero.
+    """
+    from .store import BoardStore
+
+    path = board_path
+    if not path:
+        registry_path = DATA_DIR / "active.json"
+        working_dir = DATA_DIR
+        try:
+            from .board_registry import BoardRegistry
+
+            active = BoardRegistry(path=str(registry_path)).get_active()
+            if active:
+                candidate = Path(working_dir) / f"board-{active}.json"
+                if candidate.is_file():
+                    path = str(candidate)
+        except Exception as exc:  # noqa: BLE001 — CLI must report, not crash
+            logger.warning("CLI store: registry lookup failed: %s", exc)
+
+    if not path:
+        return None
+    return BoardStore(path=path)
+
+
 def main() -> int:
     """CLI entry point for manual queue processing."""
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(description="Process Agent1 sync queues")
     parser.add_argument("--process-in", action="store_true", help="Process inbound (Agent1→Kanban)")
     parser.add_argument("--queue-dir", type=str, help="Queue directory to process")
+    parser.add_argument(
+        "--board",
+        type=str,
+        help="Board working copy to apply messages to "
+        "(default: the active board from data/active.json)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
 
     if args.process_in:
         qdir = Path(args.queue_dir) if args.queue_dir else QUEUE_AGENT1_TO_KANBAN
-        count = process_inbound(None, qdir)
+        store = _cli_store(args.board)
+        if store is None:
+            print(
+                "No board to apply messages to: pass --board <path> or set an "
+                "active board (data/active.json). Refusing to run without a store.",
+                file=sys.stderr,
+            )
+            return 2
+        count = process_inbound(store, qdir)
         print(f"Processed {count} messages from {qdir}")
         return 0
     else:
