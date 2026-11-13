@@ -17,6 +17,7 @@ Fix: ``_should_sync()`` delegates to ``kanban_sync.sync_enabled()``.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -153,6 +154,64 @@ def test_process_env_switch_off_overrides_env_file(tmp_path, monkeypatch):
 
     assert r.status_code == 409
     assert not queue.exists() or ks.read_queue(queue)[0] == []
+
+
+def test_shipped_config_enables_both_sync_gates():
+    """Deployment contract for the reported failure.
+
+    The code fix alone did not stop the 409: the operator's switch lives in
+    ``C:\\Dev\\Agent1\\.env``, a DIFFERENT repo, and the Kanban app resolves
+    gate 1 from its own repo root.  With no ``Kanban\\.env`` and no exported
+    variable, ``sync_enabled()`` returned False while the checkbox read
+    ``{"agent1": true}`` on disk — so Work answered "not enabled for this
+    board" forever.
+
+    This test pins the machine-local settings that actually open gate 1, and
+    keeps ``KANBAN_WORKING_DIR`` pointed at the same queue root Agent1's bridge
+    uses.  It fails if ``.env`` is deleted, emptied, or the switch flipped off.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    env_file = repo / ".env"
+
+    assert env_file.is_file(), (
+        "Kanban repo root needs a .env with KANBAN_SYNC_ENABLED=1; the Agent1 "
+        "repo's .env does not apply to this app"
+    )
+
+    values: dict[str, str] = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        values[key.strip()] = value.strip().strip("\"'")
+
+    assert values.get("KANBAN_SYNC_ENABLED", "").lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    ), "gate 1 (master switch) must be on in Kanban's own .env"
+
+    # Gate 1 must resolve on from the file alone, with nothing exported.
+    monkeypatch_env = os.environ.pop("KANBAN_SYNC_ENABLED", None)
+    try:
+        assert ks.sync_enabled() is True
+    finally:
+        if monkeypatch_env is not None:
+            os.environ["KANBAN_SYNC_ENABLED"] = monkeypatch_env
+
+    # Both sides of the bridge must resolve one shared queue root.
+    working = Path(values.get("KANBAN_WORKING_DIR") or "data")
+    if not working.is_absolute():
+        working = repo / working
+    assert (working / "queue-kanban-to-agent1" / "messages.jsonl").is_file(), (
+        f"KANBAN_WORKING_DIR must be the queue root Agent1 also writes to: {working}"
+    )
+
+    # The template that documents the setting must exist for a fresh checkout.
+    assert (repo / ".env.example").is_file()
 
 
 def test_should_sync_uses_the_shared_switch_resolver(tmp_path, monkeypatch):

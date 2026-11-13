@@ -2,6 +2,33 @@
 
 All notable changes to this board app are documented here, newest first.
 
+## 2026-11-13 — Fix (part 2): Work button still refused because gate 1 lives in this repo's `.env`
+
+- **Symptom.** After the resolver fix below, the Work button dialog was
+  unchanged: `agent1 sync is not enabled for this board`, with "Agent1 sync"
+  ticked.
+- **Root cause: a config gap, not a code path.** The Work gate has two
+  independent switches. The checkbox satisfies gate 2 (board file on disk held
+  `{"sync": {"agent1": true}}`). Gate 1 — the process-level master switch
+  `KANBAN_SYNC_ENABLED` — is resolved from the **Kanban repo root**'s `.env`.
+  The operator's `KANBAN_SYNC_ENABLED=1` sits in `C:\Dev\Agent1\.env`, a
+  different checkout, and nothing exported it into the Kanban process. With no
+  `Kanban\.env` at all, `sync_enabled()` returned `False`, gate 1 failed, and
+  the route answered with gate 2's message. Reproduced directly:
+  `sync_enabled() = False` while `sync_allowed('agent1') = True`.
+- **Fix (config).** Added `Kanban\.env` with `KANBAN_SYNC_ENABLED=1` and an
+  absolute `KANBAN_WORKING_DIR=C:\Dev\Kanban\data`, plus `.env.example`
+  documenting both gates, the cross-repo caveat, and the shared queue root.
+- **`.gitignore`:** added `.env` / `.env.local` — the repo had no ignore rule for
+  it, so a machine-local settings file risked being committed.
+- **Test:** `tests/test_card_work_sync_switch.py::test_shipped_config_enables_both_sync_gates`
+  pins the deployment contract (`.env` present, gate 1 on from the file alone,
+  queue root shared with Agent1, `.env.example` tracked). Verified red with
+  `.env` renamed away, green with it restored.
+- **Docs:** README gained an "Agent1 sync settings" section: the two-gate table,
+  the exact 409 text, why a sibling repo's `.env` does not apply, and the
+  restart requirement.
+
 ## 2026-11-13 — Fix: Work button said "agent1 sync is not enabled" while the checkbox was ticked
 
 - **Gap.** Pressing the card's Work button returned

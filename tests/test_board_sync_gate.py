@@ -179,11 +179,17 @@ class TestOutboundGate:
         assert [m["op"] for m in msgs] == ["card_create"]
 
     def test_master_switch_still_dominates(self, tmp_path, monkeypatch):
-        """Env switch off -> no outbound even when the board opted in."""
+        """Env switch off -> no outbound even when the board opted in.
+
+        Both layers of gate 1 must be closed: the repo ships a real ``.env``
+        with ``KANBAN_SYNC_ENABLED=1``, so clearing only the process variable
+        leaves the file open and the card queues anyway.
+        """
         client, app = _client(tmp_path)
         qdir = Path(tmp_path / "q-kb-to-a1")
         qdir.mkdir()
-        monkeypatch.delenv("KANBAN_SYNC_ENABLED", raising=False)
+        monkeypatch.setenv("KANBAN_SYNC_ENABLED", "0")
+        monkeypatch.setattr(ks, "_ENV_FILE", tmp_path / "does-not-exist.env")
         monkeypatch.setattr(ks, "QUEUE_KANBAN_TO_AGENT1", qdir)
         _live_store(app).set_sync_settings({"agent1": True})
 

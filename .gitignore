@@ -1,3 +1,7 @@
+# Machine-local settings (sync switch, queue root). Keep .env.example tracked.
+.env
+.env.local
+
 # Runtime board data (persisted frames/cards)
 data/
 

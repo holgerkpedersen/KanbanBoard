@@ -16,10 +16,39 @@ Usage in tests::
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sync_switch_isolation():
+    """Keep the real repo ``.env`` out of every test's sync-gate decisions.
+
+    ``kanban_sync.sync_enabled()`` resolves the master switch as: process env
+    first, then the repo-root ``.env``. The repo now ships a working
+    ``.env`` with ``KANBAN_SYNC_ENABLED=1`` (that file is what opens gate 1 of
+    the Work button on a real machine), so a test that only clears
+    ``os.environ`` no longer means "sync off" — it inherits the developer's
+    settings and silently starts queue threads.
+
+    Exporting an explicit value makes the resolver ignore the file entirely,
+    which restores the pre-``.env`` baseline: tests get "off by default" and
+    any test that wants sync on sets the variable itself (see
+    ``test_app_sync_env_file.py``, which also redirects ``_ENV_FILE``).
+    """
+    saved = os.environ.get("KANBAN_SYNC_ENABLED")
+    os.environ["KANBAN_SYNC_ENABLED"] = "0"
+    yield
+    if saved is None:
+        os.environ.pop("KANBAN_SYNC_ENABLED", None)
+    else:
+        os.environ["KANBAN_SYNC_ENABLED"] = saved
+
 
 TEST_CSRF_TOKEN = "test-csrf-token"
 

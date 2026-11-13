@@ -57,6 +57,43 @@ Then open <http://127.0.0.1:5000> in a browser.
 > The `data/` directory is gitignored — it holds your local board state and is never
 > committed.
 
+## Agent1 sync settings
+
+Two **independent** gates must both be on before a card reaches Agent1 (the Work
+button, and every outbound card op):
+
+| Gate | Where it lives | Read by |
+| --- | --- | --- |
+| 1. master switch `KANBAN_SYNC_ENABLED` | process env, else the **Kanban repo's own** `.env` | `kanban_sync.sync_enabled()` |
+| 2. per-board opt-in `{"sync": {"agent1": true}}` | the "Agent1 sync" checkbox in the Boards dialog, stored in the board file | `BoardStore.sync_allowed()` |
+
+Gate 1 is resolved from this repo's root — **not** from a sibling checkout.
+An `Agent1\.env` with `KANBAN_SYNC_ENABLED=1` does not open gate 1 for the Kanban
+app. With gate 1 closed, Work answers:
+
+```
+409 {"error": "agent1 sync is not enabled for this board"}
+```
+
+That message names gate 2, so a ticked checkbox is not proof the switch is on.
+
+To enable sync on a machine that launches the app without exporting variables,
+copy `.env.example` to `.env` in the repo root and set:
+
+```ini
+KANBAN_SYNC_ENABLED=1
+KANBAN_WORKING_DIR=C:\Dev\Kanban\data
+```
+
+`KANBAN_WORKING_DIR` is the **shared queue root** — Agent1's bridge resolves the
+same variable from its own `.env`, and both sides must land on one physical
+directory (`queue-kanban-to-agent1/` and `queue-agent1-to-kanban/`). Set it to an
+absolute path: the relative default follows the launch directory, so a launcher
+starting the app from elsewhere silently points at an empty tree. `.env` is
+gitignored; `.env.example` is tracked.
+
+Restart the app after editing `.env` — the queue paths are computed at import.
+
 ## Data storage
 
 - The running app persists frames and cards to a per-board working copy under the

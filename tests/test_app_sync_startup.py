@@ -141,10 +141,17 @@ def test_failing_sync_startup_is_swallowed(sync_enabled):
 
 
 def test_sync_disabled_does_not_start_processor(monkeypatch):
-    """With sync off, the processor is never constructed."""
+    """With sync off, the processor is never constructed.
+
+    "Off" must be asserted in BOTH layers the resolver reads: the process env
+    and the repo ``.env``. The repo ships a real ``.env`` with
+    ``KANBAN_SYNC_ENABLED=1``, so clearing only the variable leaves gate 1 open
+    through the file and the processor starts.
+    """
     from src.agent1 import kanban_sync as ks
 
-    monkeypatch.delenv("KANBAN_SYNC_ENABLED", raising=False)
+    monkeypatch.setenv("KANBAN_SYNC_ENABLED", "0")
+    monkeypatch.setattr(ks, "_ENV_FILE", Path("does-not-exist.env"))
     _StubProcessor.started = False
     monkeypatch.setattr(ks, "QueueProcessor", _StubProcessor)
 
